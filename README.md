@@ -1,6 +1,6 @@
 # Ragnarök
 
-A Ring-0 x86_64 operating system written in freestanding Odin, booting directly via UEFI (OVMF) with a planned self-hosted Odin-subset compiler and custom shell language.
+A Ring-0 x86_64 operating system written in freestanding Odin, booting directly via UEFI (OVMF) with a custom shell language.
 
 ## Quick Start
 
