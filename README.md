@@ -1,5 +1,7 @@
 # Ragnarök
 
+![Ragnarök — Twilight of the Gods](meta/ragnarok.gif)
+
 A Ring-0 x86_64 operating system written in freestanding Odin, booting directly via UEFI (OVMF) with a custom shell language.
 
 ## Quick Start
