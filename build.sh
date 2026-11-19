@@ -18,6 +18,12 @@ require_cmd() {
 }
 
 build() {
+    local mode="${1:-}"
+    local debug_flags=()
+    if [[ "$mode" == "debug" ]]; then
+        debug_flags=(-debug)
+    fi
+
     require_cmd odin nasm lld-link
     mkdir -p "$ESP_DIR/EFI/BOOT"
 
@@ -29,7 +35,7 @@ build() {
         -target:freestanding_amd64_win64 \
         -build-mode:obj \
         -use-single-module \
-        -debug \
+        "${debug_flags[@]}" \
         -no-crt \
         -no-entry-point \
         -default-to-nil-allocator \
@@ -204,7 +210,8 @@ build_usb() {
 
 debug_vm() {
     require_cmd qemu-system-x86_64
-    build
+    echo "Note: -debug enables DWARF line info for LLDB (Odin emits benign .debug_gdb_scripts COFF warnings)."
+    build debug
     qemu_base_args
     echo "QEMU paused at reset vector on gdbserver :1234 (COM1 on stdio)."
     echo "Attach with LLDB:"
