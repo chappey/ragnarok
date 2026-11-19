@@ -32,6 +32,7 @@ build() {
         -no-crt \
         -no-entry-point \
         -default-to-nil-allocator \
+        -no-thread-local \
         -disable-red-zone \
         -out:"$BUILD_DIR/kernel.obj"
 
@@ -106,7 +107,7 @@ test_vm() {
     build
     qemu_base_args
     python3 - "${QEMU_ARGS[@]}" <<'PY'
-import select, subprocess, sys, time
+import re, select, subprocess, sys, time
 
 cmd = ["qemu-system-x86_64", *sys.argv[1:], "-display", "none", "-serial", "stdio"]
 proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -127,7 +128,7 @@ try:
             if not sent and b"RAGNAROK_READY" in buf:
                 sent = True
                 # First newline exits live animated splash into shell
-                proc.stdin.write(b"\ninfo\nmem\nlspci\nlsblk\nls\ncat WELCOME.TXT\nhalt\n")
+                proc.stdin.write(b"\nsys\nmem\npci | find NVMe\ndisks\nls\nread WELCOME.TXT | find AHCI\nread WELCOME.TXT | count\necho hello | hex\nmem\nhalt\n")
                 proc.stdin.flush()
         if proc.poll() is not None:
             break
@@ -136,10 +137,26 @@ finally:
         proc.terminate()
     proc.wait(timeout=5)
 
-if b"RAGNAROK_READY" not in buf or b"Welcome to Ragnarok OS" not in buf or b"USB=kbd" not in buf:
-    print("FAIL: expected boot banner, USB=kbd, and FAT32 WELCOME.TXT output", file=sys.stderr)
+required = [
+    b"RAGNAROK_READY",
+    b"USB=kbd",
+    b"NVMe SSD",
+    b"Read directly via AHCI/NVMe DMA",
+    b"lines=2",
+    b"68 65 6C 6C 6F",
+    b"Arena test: PASS",
+]
+for needle in required:
+    if needle not in buf:
+        print(f"FAIL: missing expected output {needle!r}", file=sys.stderr)
+        sys.exit(1)
+
+used_matches = re.findall(rb"used=(\d+) pages", buf)
+if len(used_matches) != 2 or used_matches[0] != used_matches[1]:
+    print(f"FAIL: expected matching PMM used page counts across pipelines, got {used_matches!r}", file=sys.stderr)
     sys.exit(1)
-print("\nPASS: Ragnarök booted via Direct UEFI -> Ring-0 -> xHCI+AHCI+NVMe+FAT32 -> ACPI poweroff")
+
+print("\nPASS: Ragnarök booted via Direct UEFI -> Ring-0 -> Arena+Pipes+xHCI+AHCI+NVMe+FAT32 -> ACPI poweroff")
 PY
 }
 

@@ -185,6 +185,129 @@ fat32_name_eq :: proc "contextless" (a: []u8, b: []u8) -> bool {
 	return true
 }
 
+fat32_ls_buf :: proc "contextless" (ob: ^Out_Buf) {
+	if !g_fat32.mounted {
+		ob_puts(ob, "No FAT32 volume mounted.\n")
+		return
+	}
+	ob_puts(ob, "FAT32 / (dev=")
+	ob_puts(ob, g_fat32.dev.name)
+	ob_puts(ob, " part_lba=")
+	ob_put_u64(ob, g_fat32.part_lba)
+	ob_puts(ob, "):\n")
+
+	cl := g_fat32.root_cluster
+	name_buf: [16]u8
+	for cl >= 2 && cl < 0x0FFF_FFF8 {
+		base_lba := fat32_cluster_to_lba(cl)
+		for s := u32(0); s < g_fat32.sectors_per_cluster; s += 1 {
+			if !block_read(g_fat32.dev, base_lba + u64(s), 1, &g_fat_secbuf[0]) {
+				return
+			}
+			for e := 0; e < 512; e += 32 {
+				ent := g_fat_secbuf[e : e + 32]
+				if ent[0] == 0x00 {
+					return
+				}
+				if ent[0] == 0xE5 {
+					continue
+				}
+				attr := ent[11]
+				if attr == 0x0F || (attr & 0x08) != 0 { // LFN or Volume ID
+					continue
+				}
+				nlen := fat32_format_83(ent[:11], name_buf[:])
+				ob_puts(ob, "  ")
+				ob_put_bytes(ob, name_buf[:nlen])
+				for k := nlen; k < 16; k += 1 {
+					ob_putc(ob, ' ')
+				}
+				if (attr & 0x10) != 0 {
+					ob_puts(ob, "<DIR>\n")
+				} else {
+					sz := fat32_read_u32(ent, 28)
+					ob_put_u64(ob, u64(sz))
+					ob_puts(ob, " B\n")
+				}
+			}
+		}
+		cl = fat32_next_cluster(cl)
+	}
+}
+
+fat32_read_file :: proc "contextless" (target: []u8, a: ^Arena) -> ([]u8, bool) {
+	if !g_fat32.mounted {
+		return nil, false
+	}
+
+	cl := g_fat32.root_cluster
+	file_cl := u32(0)
+	file_sz := u32(0)
+	found   := false
+	name_buf: [16]u8
+
+	search: for cl >= 2 && cl < 0x0FFF_FFF8 {
+		base_lba := fat32_cluster_to_lba(cl)
+		for s := u32(0); s < g_fat32.sectors_per_cluster; s += 1 {
+			if !block_read(g_fat32.dev, base_lba + u64(s), 1, &g_fat_secbuf[0]) {
+				break search
+			}
+			for e := 0; e < 512; e += 32 {
+				ent := g_fat_secbuf[e : e + 32]
+				if ent[0] == 0x00 {
+					break search
+				}
+				if ent[0] == 0xE5 || ent[11] == 0x0F || (ent[11] & 0x18) != 0 {
+					continue
+				}
+				nlen := fat32_format_83(ent[:11], name_buf[:])
+				if fat32_name_eq(name_buf[:nlen], target) {
+					hi := u32(fat32_read_u16(ent, 20))
+					lo := u32(fat32_read_u16(ent, 26))
+					file_cl = (hi << 16) | lo
+					file_sz = fat32_read_u32(ent, 28)
+					found = true
+					break search
+				}
+			}
+		}
+		cl = fat32_next_cluster(cl)
+	}
+
+	if !found {
+		return nil, false
+	}
+	if file_sz == 0 {
+		return nil, true
+	}
+
+	raw := arena_alloc(a, u64(file_sz), 1)
+	if raw == nil {
+		return nil, false
+	}
+	dst := ([^]u8)(raw)
+
+	rem := file_sz
+	cur := file_cl
+	off := u32(0)
+	for rem > 0 && cur >= 2 && cur < 0x0FFF_FFF8 {
+		base_lba := fat32_cluster_to_lba(cur)
+		for s := u32(0); s < g_fat32.sectors_per_cluster && rem > 0; s += 1 {
+			if !block_read(g_fat32.dev, base_lba + u64(s), 1, &g_fat_secbuf[0]) {
+				return nil, false
+			}
+			n := rem if rem < 512 else 512
+			for i := u32(0); i < n; i += 1 {
+				dst[off + i] = g_fat_secbuf[i]
+			}
+			off += n
+			rem -= n
+		}
+		cur = fat32_next_cluster(cur)
+	}
+	return dst[:off], true
+}
+
 fat32_ls :: proc "contextless" () {
 	if !g_fat32.mounted {
 		out_puts("No FAT32 volume mounted.\n")

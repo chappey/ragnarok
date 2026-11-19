@@ -163,6 +163,34 @@ out_put_hex16 :: proc "contextless" (v: u16) {
 	out_put_hex8(u8(v & 0xFF))
 }
 
+pci_write_devices :: proc "contextless" (ob: ^Out_Buf) {
+	ob_puts(ob, "PCI devices (")
+	ob_put_u64(ob, u64(g_pci_count))
+	ob_puts(ob, " found):\n")
+	for i := 0; i < g_pci_count; i += 1 {
+		d := &g_pci_devs[i]
+		ob_puts(ob, "  ")
+		ob_put_hex8(ob, d.bus)
+		ob_putc(ob, ':')
+		ob_put_hex8(ob, d.slot)
+		ob_putc(ob, '.')
+		ob_putc(ob, u8('0' + d.func))
+		ob_puts(ob, "  ")
+		ob_put_hex16(ob, d.vendor_id)
+		ob_putc(ob, ':')
+		ob_put_hex16(ob, d.device_id)
+		ob_puts(ob, "  cls=")
+		ob_put_hex8(ob, d.class)
+		ob_putc(ob, '/')
+		ob_put_hex8(ob, d.subclass)
+		ob_putc(ob, '/')
+		ob_put_hex8(ob, d.progif)
+		ob_puts(ob, "  ")
+		ob_puts(ob, pci_class_name(d))
+		ob_puts(ob, "\n")
+	}
+}
+
 pci_print_devices :: proc "contextless" () {
 	out_puts("PCI devices (")
 	out_put_u64(u64(g_pci_count))

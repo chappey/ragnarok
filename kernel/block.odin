@@ -57,6 +57,27 @@ block_write :: proc "contextless" (dev: ^Block_Device, lba: u64, count: u32, buf
 	return dev.write(dev, lba, count, buf)
 }
 
+block_write_devices :: proc "contextless" (ob: ^Out_Buf) {
+	ob_puts(ob, "Block devices (")
+	ob_put_u64(ob, u64(g_block_count))
+	ob_puts(ob, " found):\n")
+	for i := 0; i < g_block_count; i += 1 {
+		d := &g_block_devs[i]
+		mib := (d.total_blocks * u64(d.block_size)) / (1024 * 1024)
+		ob_puts(ob, "  [")
+		ob_put_u64(ob, u64(i))
+		ob_puts(ob, "] ")
+		ob_puts(ob, d.name)
+		ob_puts(ob, "  ")
+		ob_put_u64(ob, d.total_blocks)
+		ob_puts(ob, " x ")
+		ob_put_u64(ob, u64(d.block_size))
+		ob_puts(ob, "B  (")
+		ob_put_u64(ob, mib)
+		ob_puts(ob, " MiB)\n")
+	}
+}
+
 block_print_devices :: proc "contextless" () {
 	out_puts("Block devices (")
 	out_put_u64(u64(g_block_count))

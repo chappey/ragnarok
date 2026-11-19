@@ -135,6 +135,21 @@ out_puts :: proc "contextless" (s: string) {
 	con_flush()
 }
 
+out_put_bytes :: proc "contextless" (b: []u8) {
+	if len(b) == 0 {
+		return
+	}
+	for i := 0; i < len(b); i += 1 {
+		c := b[i]
+		if c == '\n' {
+			serial_putc('\r')
+		}
+		serial_putc(c)
+		con_putc_raw(c)
+	}
+	con_flush()
+}
+
 out_put_u64 :: proc "contextless" (val: u64) {
 	serial_put_u64(val)
 	if val == 0 {
