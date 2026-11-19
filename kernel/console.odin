@@ -90,17 +90,77 @@ con_putc_raw :: proc "contextless" (c: u8) {
 	}
 }
 
+cmos_read_reg :: proc "contextless" (reg: u8) -> u8 {
+	arch_outb(0x70, reg)
+	return arch_inb(0x71)
+}
+
+bcd_to_bin :: proc "contextless" (v: u8) -> u8 {
+	return (v & 0x0F) + ((v >> 4) * 10)
+}
+
+fmt_2d :: proc "contextless" (buf: []u8, off: int, v: u8) {
+	buf[off]     = u8('0' + (v / 10) % 10)
+	buf[off + 1] = u8('0' + v % 10)
+}
+
+// Format CMOS hardware clock as "YYYY-MM-DD HH:MM:SS" (19 bytes)
+rtc_format_utc :: proc "contextless" (buf: []u8) -> int {
+	for (cmos_read_reg(0x0A) & 0x80) != 0 {
+		arch_pause()
+	}
+	sec   := cmos_read_reg(0x00)
+	min   := cmos_read_reg(0x02)
+	hour  := cmos_read_reg(0x04)
+	day   := cmos_read_reg(0x07)
+	month := cmos_read_reg(0x08)
+	year  := cmos_read_reg(0x09)
+	reg_b := cmos_read_reg(0x0B)
+
+	if (reg_b & 0x04) == 0 {
+		sec   = bcd_to_bin(sec)
+		min   = bcd_to_bin(min)
+		hour  = bcd_to_bin(hour & 0x7F) | (hour & 0x80)
+		day   = bcd_to_bin(day)
+		month = bcd_to_bin(month)
+		year  = bcd_to_bin(year)
+	}
+	if (reg_b & 0x02) == 0 && (hour & 0x80) != 0 {
+		hour = ((hour & 0x7F) + 12) % 24
+	}
+
+	buf[0] = '2'
+	buf[1] = '0'
+	fmt_2d(buf, 2, year)
+	buf[4] = '-'
+	fmt_2d(buf, 5, month)
+	buf[7] = '-'
+	fmt_2d(buf, 8, day)
+	buf[10] = ' '
+	fmt_2d(buf, 11, hour)
+	buf[13] = ':'
+	fmt_2d(buf, 14, min)
+	buf[16] = ':'
+	fmt_2d(buf, 17, sec)
+	return 19
+}
+
 con_draw_status_bar :: proc "contextless" () {
 	gfx_rect(0, 0, GFX_WIDTH, 8, COL_BLUE)
-	gfx_text(8, 0, "RAGNAROK OS v0.1 | 640x480x16 | RING-0 UEFI", COL_YELLOW, COL_BLUE)
+	gfx_text(8, 0, "RAGNAROK v0.1", COL_YELLOW, COL_BLUE)
+
+	clk_buf: [19]u8
+	_ = rtc_format_utc(clk_buf[:])
+	gfx_text((GFX_WIDTH - 19 * 8) / 2, 0, string(clk_buf[:]), COL_WHITE, COL_BLUE)
+
 	if g_xhci.kbd_ready && g_ps2_present {
-		gfx_text(GFX_WIDTH - 104, 0, "[USB+PS/2 OK]", COL_LTGREEN, COL_BLUE)
+		gfx_text(GFX_WIDTH - 88, 0, "[USB+PS/2]", COL_LTGREEN, COL_BLUE)
 	} else if g_xhci.kbd_ready {
-		gfx_text(GFX_WIDTH - 104, 0, "[USB KBD OK] ", COL_LTGREEN, COL_BLUE)
+		gfx_text(GFX_WIDTH - 48, 0, "[USB]", COL_LTGREEN, COL_BLUE)
 	} else if g_ps2_present {
-		gfx_text(GFX_WIDTH - 104, 0, "[PS/2 READY] ", COL_LTGREEN, COL_BLUE)
+		gfx_text(GFX_WIDTH - 56, 0, "[PS/2]", COL_LTGREEN, COL_BLUE)
 	} else {
-		gfx_text(GFX_WIDTH - 104, 0, "[SERIAL ONLY]", COL_LTRED, COL_BLUE)
+		gfx_text(GFX_WIDTH - 48, 0, "[SER]", COL_LTRED, COL_BLUE)
 	}
 }
 

@@ -123,47 +123,7 @@ kernel_main :: proc "contextless" (map_size, desc_size: uintptr) {
 	run_ragnarok_splash()
 
 	con_set_color(COL_YELLOW, COL_BLACK)
-	out_puts("================================================================================\n")
-	con_set_color(COL_LTRED, COL_BLACK)
-	out_puts("  RAGNAROK OS v0.1  --  TWILIGHT OF THE GODS  (x86_64 Ring-0, Odin + UEFI)\n")
-	con_set_color(COL_YELLOW, COL_BLACK)
-	out_puts("================================================================================\n")
-
-	con_set_color(COL_LTCYAN, COL_BLACK)
-	out_puts("GOP:    ")
-	out_put_u64(u64(g_fb.width))
-	out_putc('x')
-	out_put_u64(u64(g_fb.height))
-	out_puts("  ->  640x480x16 canvas (scale=")
-	out_put_u64(u64(g_fb.scale))
-	out_puts("x, off=")
-	out_put_u64(u64(g_fb.off_x))
-	out_putc(',')
-	out_put_u64(u64(g_fb.off_y))
-	out_puts(")\n")
-
-	out_puts("Input:  USB=")
-	if g_xhci.kbd_ready {
-		out_puts("kbd")
-	} else if g_xhci.present {
-		out_puts("xhci")
-	} else {
-		out_puts("no")
-	}
-	out_puts("  PS/2=")
-	out_puts("yes" if g_ps2_present else "no")
-	out_puts("  COM1=")
-	out_puts("yes" if g_serial_present else "no")
-	out_puts("  RAM=")
-	out_put_u64((g_pmm_free_pages * PAGE_SIZE) / (1024 * 1024))
-	out_puts("M  PCI=")
-	out_put_u64(u64(g_pci_count))
-	out_puts("  BLK=")
-	out_put_u64(u64(g_block_count))
-	out_puts("\n")
-
-	con_set_color(COL_LTGRAY, COL_BLACK)
-	out_puts("Type 'help', 'sys', 'mem', 'pci', 'disks', 'ls', 'read <file>', or 'splash'.\n\n")
+	out_puts("Ragnarok -- Twilight of the Gods. Type 'help' to begin.\n\n")
 
 	shell_loop()
 }

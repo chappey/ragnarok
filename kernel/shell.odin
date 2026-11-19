@@ -431,56 +431,10 @@ cmd_sys :: proc(ctx: ^Cmd_Context) -> int {
 	return 0
 }
 
-cmos_read_reg :: proc "contextless" (reg: u8) -> u8 {
-	arch_outb(0x70, reg)
-	return arch_inb(0x71)
-}
-
-bcd_to_bin :: proc "contextless" (v: u8) -> u8 {
-	return (v & 0x0F) + ((v >> 4) * 10)
-}
-
-ob_put_2d :: proc "contextless" (ob: ^Out_Buf, v: u8) {
-	ob_putc(ob, u8('0' + (v / 10) % 10))
-	ob_putc(ob, u8('0' + v % 10))
-}
-
 cmd_rtc :: proc(ctx: ^Cmd_Context) -> int {
-	for (cmos_read_reg(0x0A) & 0x80) != 0 {
-		arch_pause()
-	}
-	sec   := cmos_read_reg(0x00)
-	min   := cmos_read_reg(0x02)
-	hour  := cmos_read_reg(0x04)
-	day   := cmos_read_reg(0x07)
-	month := cmos_read_reg(0x08)
-	year  := cmos_read_reg(0x09)
-	reg_b := cmos_read_reg(0x0B)
-
-	if (reg_b & 0x04) == 0 {
-		sec   = bcd_to_bin(sec)
-		min   = bcd_to_bin(min)
-		hour  = bcd_to_bin(hour & 0x7F) | (hour & 0x80)
-		day   = bcd_to_bin(day)
-		month = bcd_to_bin(month)
-		year  = bcd_to_bin(year)
-	}
-	if (reg_b & 0x02) == 0 && (hour & 0x80) != 0 {
-		hour = ((hour & 0x7F) + 12) % 24
-	}
-
-	ob_puts(ctx.out, "20")
-	ob_put_2d(ctx.out, year)
-	ob_putc(ctx.out, '-')
-	ob_put_2d(ctx.out, month)
-	ob_putc(ctx.out, '-')
-	ob_put_2d(ctx.out, day)
-	ob_putc(ctx.out, ' ')
-	ob_put_2d(ctx.out, hour)
-	ob_putc(ctx.out, ':')
-	ob_put_2d(ctx.out, min)
-	ob_putc(ctx.out, ':')
-	ob_put_2d(ctx.out, sec)
+	buf: [19]u8
+	n := rtc_format_utc(buf[:])
+	ob_put_bytes(ctx.out, buf[:n])
 	ob_puts(ctx.out, " UTC\n")
 	return 0
 }
