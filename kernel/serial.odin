@@ -6,11 +6,18 @@ foreign {
 	arch_outw     :: proc "c" (port: u16, val: u16) ---
 	arch_inl      :: proc "c" (port: u16) -> u32 ---
 	arch_outl     :: proc "c" (port: u16, val: u32) ---
-	arch_cli      :: proc "c" () ---
-	arch_sti      :: proc "c" () ---
-	arch_rdtsc    :: proc "c" () -> u64 ---
-	arch_read_cr2 :: proc "c" () -> u64 ---
-	arch_hlt      :: proc "c" () ---
+	arch_cli               :: proc "c" () ---
+	arch_sti               :: proc "c" () ---
+	arch_rdtsc             :: proc "c" () -> u64 ---
+	arch_read_cr2          :: proc "c" () -> u64 ---
+	arch_load_gdt          :: proc "c" () ---
+	arch_load_idt          :: proc "c" (idtr: rawptr) ---
+	arch_int3              :: proc "c" () ---
+	arch_get_isr_stub      :: proc "c" (vec: u64) -> u64 ---
+	arch_get_irq0_stub     :: proc "c" () -> u64 ---
+	arch_get_spurious_stub :: proc "c" () -> u64 ---
+	arch_get_pit_ticks     :: proc "c" () -> u64 ---
+	arch_hlt               :: proc "c" () ---
 	arch_pause    :: proc "c" () ---
 	arch_mfence   :: proc "c" () ---
 	arch_reboot   :: proc "c" () ---

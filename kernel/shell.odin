@@ -29,7 +29,7 @@ Command :: struct {
 	run:     Cmd_Proc,
 }
 
-g_commands := [34]Command{
+g_commands := [35]Command{
 	{
 		name    = "help",
 		summary = "List commands or show usage for one command",
@@ -71,6 +71,12 @@ g_commands := [34]Command{
 		summary = "Benchmark a command or pipeline using RDTSC",
 		usage   = "time <command...>",
 		run     = cmd_time,
+	},
+	{
+		name    = "selftest",
+		summary = "Run IDT #BP trap and 1000 Hz PIT IRQ0 tick self-test",
+		usage   = "selftest",
+		run     = cmd_selftest,
 	},
 	{
 		name    = "clear",
@@ -516,13 +522,34 @@ cmd_uptime :: proc(ctx: ^Cmd_Context) -> int {
 	ob_putc(ctx.out, u8('0' + rem % 10))
 	ob_puts(ctx.out, "s | tsc=")
 	ob_put_u64(ctx.out, g_tsc_khz / 1000)
-	ob_puts(ctx.out, " MHz\n")
+	ob_puts(ctx.out, " MHz | pit_ticks=")
+	ob_put_u64(ctx.out, arch_get_pit_ticks())
+	ob_puts(ctx.out, " (1000 Hz)\n")
 	return 0
 }
 
 cmd_time :: proc(ctx: ^Cmd_Context) -> int {
 	ob_puts(ctx.out, "Usage: time <command...>\n")
 	return 1
+}
+
+cmd_selftest :: proc(ctx: ^Cmd_Context) -> int {
+	g_bp_hit = false
+	arch_int3()
+	ob_puts(ctx.out, "IDT #BP test: ")
+	ob_puts(ctx.out, "PASS\n" if g_bp_hit else "FAIL\n")
+
+	t0 := arch_get_pit_ticks()
+	end_us := tsc_us() + 5000
+	for tsc_us() < end_us {
+		arch_pause()
+	}
+	t1 := arch_get_pit_ticks()
+	ob_puts(ctx.out, "PIT IRQ0 ticks: ")
+	ob_put_u64(ctx.out, t1)
+	ob_puts(ctx.out, " -> ")
+	ob_puts(ctx.out, "PASS\n" if t1 > t0 && t0 > 0 else "FAIL\n")
+	return 0 if (g_bp_hit && t1 > t0 && t0 > 0) else 1
 }
 
 cmd_clear :: proc(ctx: ^Cmd_Context) -> int {

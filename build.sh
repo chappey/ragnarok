@@ -133,7 +133,7 @@ try:
                 sent = True
                 # First newline exits live animated splash into shell
                 proc.stdin.write(
-                    b"\nsys\nrtc\nuptime\ndmesg | find PMM\ntime echo bench\nmem\npci | head 3\ndisks\ndf\nls\nls /EFI/BOOT\n"
+                    b"\nsys\nrtc\nuptime\nselftest\ndmesg | find PMM\ntime echo bench\nmem\npci | head 3\ndisks\ndf\nls\nls /EFI/BOOT\n"
                     b"mkdir TESTDIR\ncd TESTDIR\npwd\n"
                     b"write A.TXT subfile\ncopy A.TXT B.TXT\nmove B.TXT C.TXT\n"
                     b"read /TESTDIR/C.TXT\ndel A.TXT\ndel C.TXT\ncd ..\nrmdir TESTDIR\n"
@@ -169,6 +169,8 @@ required = [
     b"tsc=",
     b"[time]",
     b"us (",
+    b"IDT #BP test: PASS",
+    b"PIT IRQ0",
     b"Arena test: PASS",
 ]
 for needle in required:

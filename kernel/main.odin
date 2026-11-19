@@ -101,6 +101,7 @@ efi_main :: proc "c" (image_handle: EFI_Handle, st: ^EFI_System_Table) -> EFI_St
 
 	arch_cli()
 	tsc_init()
+	idt_init()
 
 	klog_prefix("INFO")
 	klog_puts("ImageBase=")
