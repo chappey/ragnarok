@@ -191,6 +191,8 @@ ensure_disk_imgs() {
     fi
     printf 'Welcome to Ragnarok OS (x86_64 Ring-0, Odin + Direct UEFI)!\nRead directly via AHCI/NVMe DMA + GPT + FAT32.\n' \
         | mcopy -i "$img@@1M" - ::/WELCOME.TXT
+    printf '# Ragnarok startup script (/AUTO.RSH)\nlet os = Ragnarok\nlet ver = 0.1\n' \
+        | mcopy -i "$img@@1M" - ::/AUTO.RSH
 
     # Rebuild 40 MiB GPT/FAT32 NVMe test disk (minimum ~33 MiB for mformat -F)
     rm -f "$nvme_img"
@@ -268,6 +270,10 @@ try:
                     b"read /TESTDIR/C.TXT\ndel A.TXT\ndel C.TXT\ncd ..\nrmdir TESTDIR\n"
                     b"tree / | find PRG\nexec /BIN/TREE.PRG /EFI\n"
                     b"note NTEST.TXT first line\necho second line | note NTEST.TXT\nnote NTEST.TXT | count\nread NTEST.TXT\ndel NTEST.TXT\n"
+                    b"echo boot=$os-$ver\nlet x = 20\nlet y = $x + 22\necho sum=$y\nread NO_SUCH_FILE\necho st=$status\n"
+                    b"note T.RSH 'let total = 0'\nnote T.RSH 'for i in 1..4'\nnote T.RSH 'let total = $total + $i'\nnote T.RSH 'end'\n"
+                    b"note T.RSH 'if $total == 10'\nnote T.RSH 'echo rsh_ok=$total arg1=$1'\nnote T.RSH 'else'\nnote T.RSH 'echo rsh_fail'\nnote T.RSH 'end'\n"
+                    b"run T.RSH hello\nT.RSH piped | find rsh_ok\ndel T.RSH\n"
                     b"read WELCOME.TXT | find AHCI\nread WELCOME.TXT | count\n"
                     b"echo hello | hex\n"
                     b"echo foo bar\x17baz\n"
@@ -312,6 +318,11 @@ required = [
     b"Appended",
     b"first line",
     b"second line",
+    b"boot=Ragnarok-0.1",
+    b"sum=42",
+    b"st=1",
+    b"rsh_ok=10 arg1=hello",
+    b"rsh_ok=10 arg1=piped",
 ]
 for needle in required:
     if needle not in buf:

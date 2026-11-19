@@ -205,6 +205,13 @@ kernel_main :: proc "contextless" (map_size, desc_size: uintptr) {
 
 	con_set_color(COL_YELLOW, COL_BLACK)
 	out_puts("Ragnarok -- Twilight of the Gods. Type 'help' to begin.\n\n")
+	con_set_color(COL_LTGRAY, COL_BLACK)
+
+	if g_fat32.mounted {
+		if _, ok := fat32_resolve_path(transmute([]u8)string("/AUTO.RSH")); ok {
+			_ = script_exec_file("/AUTO.RSH", nil, nil)
+		}
+	}
 
 	shell_loop()
 }

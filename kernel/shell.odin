@@ -27,7 +27,7 @@ Command :: struct {
 	run:     Cmd_Proc,
 }
 
-g_commands := [37]Command{
+g_commands := [39]Command{
 	{
 		name    = "help",
 		summary = "List commands or show usage for one command",
@@ -165,6 +165,18 @@ g_commands := [37]Command{
 		summary = "Load and execute a standalone .prg binary from FAT32",
 		usage   = "exec <file.prg> [args...]",
 		run     = cmd_exec,
+	},
+	{
+		name    = "let",
+		summary = "List or assign shell variables (supports + - * / % and pipes)",
+		usage   = "let [name [= value | a op b]]",
+		run     = cmd_let,
+	},
+	{
+		name    = "run",
+		summary = "Execute a .rsh script file from FAT32",
+		usage   = "run <script.rsh> [args...]",
+		run     = cmd_run,
 	},
 	{
 		name    = "find",
@@ -708,6 +720,136 @@ cmd_exec :: proc(ctx: ^Cmd_Context) -> int {
 	return prg_exec_file(resolved, &sub_ctx)
 }
 
+cmd_let :: proc(ctx: ^Cmd_Context) -> int {
+	if len(ctx.args) < 2 {
+		var_write_all(ctx.out)
+		return 0
+	}
+	if ctx.args[1] == "-u" {
+		if len(ctx.args) < 3 {
+			ob_puts(ctx.out, "Usage: let -u <name>\n")
+			return 1
+		}
+		_ = var_unset(ctx.args[2])
+		return 0
+	}
+
+	name := ctx.args[1]
+	rhs_buf: [SHELL_MAX_ARGS]string
+	rhs_len := 0
+
+	// Support "let name=value" as well as "let name = value" and "let name value"
+	arg1_b := transmute([]u8)ctx.args[1]
+	eq_pos := -1
+	for i := 0; i < len(arg1_b); i += 1 {
+		if arg1_b[i] == '=' {
+			eq_pos = i
+			break
+		}
+	}
+
+	if eq_pos >= 0 {
+		name = string(arg1_b[:eq_pos])
+		if eq_pos + 1 < len(arg1_b) {
+			rhs_buf[rhs_len] = string(arg1_b[eq_pos + 1:])
+			rhs_len += 1
+		}
+		for i := 2; i < len(ctx.args) && rhs_len < len(rhs_buf); i += 1 {
+			rhs_buf[rhs_len] = ctx.args[i]
+			rhs_len += 1
+		}
+	} else {
+		start := 2
+		if len(ctx.args) >= 3 && ctx.args[2] == "=" {
+			start = 3
+		}
+		for i := start; i < len(ctx.args) && rhs_len < len(rhs_buf); i += 1 {
+			rhs_buf[rhs_len] = ctx.args[i]
+			rhs_len += 1
+		}
+	}
+
+	num_buf: [32]u8
+	val := ""
+
+	if rhs_len == 0 && len(ctx.in_buf) > 0 {
+		end := len(ctx.in_buf)
+		for end > 0 && (ctx.in_buf[end - 1] == '\n' || ctx.in_buf[end - 1] == '\r') {
+			end -= 1
+		}
+		val = string(ctx.in_buf[:end])
+	} else if rhs_len == 3 {
+		op := rhs_buf[1]
+		is_arith_op := op == "+" || op == "-" || op == "*" || op == "/" || op == "%"
+		if is_arith_op {
+			if a, ok_a := parse_i64(rhs_buf[0]); ok_a {
+				if b, ok_b := parse_i64(rhs_buf[2]); ok_b {
+					res := i64(0)
+					switch op {
+					case "+": res = a + b
+					case "-": res = a - b
+					case "*": res = a * b
+					case "/":
+						if b == 0 {
+							ob_puts(ctx.out, "let: division by zero\n")
+							return 1
+						}
+						res = a / b
+					case "%":
+						if b == 0 {
+							ob_puts(ctx.out, "let: division by zero\n")
+							return 1
+						}
+						res = a % b
+					}
+					val = fmt_i64(res, num_buf[:])
+					if !var_set(name, val) {
+						ob_puts(ctx.out, "let: invalid variable name or table full\n")
+						return 1
+					}
+					return 0
+				}
+			}
+		}
+		tmp: Out_Buf
+		ob_init(&tmp, ctx.arena)
+		for i := 0; i < rhs_len; i += 1 {
+			if i > 0 { ob_putc(&tmp, ' ') }
+			ob_puts(&tmp, rhs_buf[i])
+		}
+		val = string(ob_bytes(&tmp))
+	} else if rhs_len > 0 {
+		tmp: Out_Buf
+		ob_init(&tmp, ctx.arena)
+		for i := 0; i < rhs_len; i += 1 {
+			if i > 0 { ob_putc(&tmp, ' ') }
+			ob_puts(&tmp, rhs_buf[i])
+		}
+		val = string(ob_bytes(&tmp))
+	}
+
+	if !var_set(name, val) {
+		ob_puts(ctx.out, "let: invalid variable name or table full\n")
+		return 1
+	}
+	return 0
+}
+
+cmd_run :: proc(ctx: ^Cmd_Context) -> int {
+	if len(ctx.args) < 2 {
+		ob_puts(ctx.out, "Usage: run <script.rsh> [args...]\n")
+		return 1
+	}
+	resolved, ok := script_resolve_path(ctx.args[1], ctx.arena)
+	if !ok {
+		ob_puts(ctx.out, "run: script not found: ")
+		ob_puts(ctx.out, ctx.args[1])
+		ob_putc(ctx.out, '\n')
+		return 1
+	}
+	return script_exec_file(resolved, ctx.args[2:], ctx.out)
+}
+
 cmd_read :: proc(ctx: ^Cmd_Context) -> int {
 	if len(ctx.args) < 2 {
 		ob_puts(ctx.out, "Usage: read <file>\n")
@@ -1139,7 +1281,7 @@ shell_trim_ws :: proc "contextless" (s: []u8) -> []u8 {
 
 shell_tokenize :: proc "contextless" (seg: []u8, a: ^Arena, out_args: []string) -> (int, bool) {
 	argc := 0
-	tok_buf: [SHELL_MAX_LINE]u8
+	tok_buf: [SCRIPT_MAX_EXPAND]u8
 	i := 0
 	for i < len(seg) {
 		for i < len(seg) && (seg[i] == ' ' || seg[i] == '\t') {
@@ -1152,14 +1294,19 @@ shell_tokenize :: proc "contextless" (seg: []u8, a: ^Arena, out_args: []string) 
 			return 0, false
 		}
 		tlen := 0
-		in_quote := false
+		quote := u8(0)
 		for i < len(seg) {
 			c := seg[i]
-			if !in_quote && (c == ' ' || c == '\t') {
+			if quote == 0 && (c == ' ' || c == '\t') {
 				break
 			}
-			if c == '"' {
-				in_quote = !in_quote
+			if quote == 0 && (c == '"' || c == '\'') {
+				quote = c
+				i += 1
+				continue
+			}
+			if quote != 0 && c == quote {
+				quote = 0
 				i += 1
 				continue
 			}
@@ -1169,7 +1316,7 @@ shell_tokenize :: proc "contextless" (seg: []u8, a: ^Arena, out_args: []string) 
 			}
 			i += 1
 		}
-		if in_quote {
+		if quote != 0 {
 			return 0, false
 		}
 		if tlen == 0 {
@@ -1189,22 +1336,11 @@ shell_tokenize :: proc "contextless" (seg: []u8, a: ^Arena, out_args: []string) 
 	return argc, true
 }
 
-shell_exec_line :: proc "contextless" (raw_line: []u8) {
-	// 1. Strip '#' comments outside double quotes
-	eff_len := len(raw_line)
-	in_q := false
-	for i := 0; i < len(raw_line); i += 1 {
-		c := raw_line[i]
-		if c == '"' {
-			in_q = !in_q
-		} else if !in_q && c == '#' {
-			eff_len = i
-			break
-		}
-	}
-	line := shell_trim_ws(raw_line[:eff_len])
+shell_exec_line_out :: proc "contextless" (raw_line: []u8, sink: ^Out_Buf) -> int {
+	// 1. Strip '#' comments outside quotes
+	line := shell_strip_comment(raw_line)
 	if len(line) == 0 {
-		return
+		return 0
 	}
 
 	// Benchmark wrapper: "time <command | pipeline>"
@@ -1213,7 +1349,7 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 		rest := shell_trim_ws(line[5:])
 		if len(rest) > 0 && !(len(rest) >= 6 && rest[0] == '-' && rest[1] == '-') {
 			t0 := arch_rdtsc()
-			shell_exec_line(rest)
+			rc := shell_exec_line_out(rest, sink)
 			dt := arch_rdtsc() - t0
 			us := (dt * 1000) / g_tsc_khz if g_tsc_khz > 0 else u64(0)
 			con_set_color(COL_LTCYAN, COL_BLACK)
@@ -1223,45 +1359,60 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 			out_put_u64(dt)
 			out_puts(" cycles)\n")
 			con_set_color(COL_LTGRAY, COL_BLACK)
-			return
+			return rc
 		}
 	}
 
-	// 2. Split into pipe stages on '|' outside double quotes
+	// Expand $variables (except inside '...' single quotes)
+	exp_buf: [SCRIPT_MAX_EXPAND]u8
+	exp_line := shell_trim_ws(script_expand_vars(line, exp_buf[:]))
+	if len(exp_line) == 0 {
+		g_last_status = 0
+		return 0
+	}
+
+	// 2. Split into pipe stages on '|' outside quotes
 	stages: [SHELL_MAX_STAGES][]u8
 	num_stages := 0
 	seg_start := 0
-	in_q = false
-	for i := 0; i <= len(line); i += 1 {
-		if i == len(line) || (!in_q && line[i] == '|') {
-			seg := shell_trim_ws(line[seg_start:i])
+	in_sq := false
+	in_dq := false
+	for i := 0; i <= len(exp_line); i += 1 {
+		if i == len(exp_line) || (!in_sq && !in_dq && exp_line[i] == '|') {
+			seg := shell_trim_ws(exp_line[seg_start:i])
 			if len(seg) == 0 {
 				con_set_color(COL_LTRED, COL_BLACK)
 				out_puts("Syntax error: empty pipe stage\n")
-				return
+				g_last_status = 1
+				return 1
 			}
 			if num_stages >= SHELL_MAX_STAGES {
 				con_set_color(COL_LTRED, COL_BLACK)
 				out_puts("Syntax error: too many pipe stages (max 8)\n")
-				return
+				g_last_status = 1
+				return 1
 			}
 			stages[num_stages] = seg
 			num_stages += 1
 			seg_start = i + 1
-		} else if line[i] == '"' {
-			in_q = !in_q
+		} else if exp_line[i] == '\'' && !in_dq {
+			in_sq = !in_sq
+		} else if exp_line[i] == '"' && !in_sq {
+			in_dq = !in_dq
 		}
 	}
-	if in_q {
+	if in_sq || in_dq {
 		con_set_color(COL_LTRED, COL_BLACK)
 		out_puts("Syntax error: unclosed quote\n")
-		return
+		g_last_status = 1
+		return 1
 	}
 
 	// 3. Execute pipeline stages, each with its own 64 KiB PMM Arena
 	prev_arena: Arena
 	prev_out: Out_Buf
 	has_prev := false
+	last_rc  := 0
 
 	for s := 0; s < num_stages; s += 1 {
 		cur_arena: Arena
@@ -1271,7 +1422,8 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 			}
 			con_set_color(COL_LTRED, COL_BLACK)
 			out_puts("Out of memory allocating command arena.\n")
-			return
+			g_last_status = 1
+			return 1
 		}
 		cur_out: Out_Buf
 		ob_init(&cur_out, &cur_arena)
@@ -1285,16 +1437,22 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 			}
 			con_set_color(COL_LTRED, COL_BLACK)
 			out_puts("Syntax error.\n")
-			return
+			g_last_status = 1
+			return 1
 		}
 
 		cmd := shell_find_cmd(args_buf[0])
-		prg_path := ""
-		prg_ok   := false
+		prg_path    := ""
+		prg_ok      := false
+		script_path := ""
+		script_ok   := false
 		if cmd == nil {
 			prg_path, prg_ok = prg_resolve_path(args_buf[0], &cur_arena)
+			if !prg_ok {
+				script_path, script_ok = script_resolve_path(args_buf[0], &cur_arena)
+			}
 		}
-		if cmd == nil && !prg_ok {
+		if cmd == nil && !prg_ok && !script_ok {
 			con_set_color(COL_LTRED, COL_BLACK)
 			out_puts("Unknown command: ")
 			out_puts(args_buf[0])
@@ -1303,11 +1461,14 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 			if has_prev {
 				arena_destroy(&prev_arena)
 			}
-			return
+			g_last_status = 127
+			return 127
 		}
 
 		want_help := false
-		if cmd != nil && (cmd.name != "exec" || (argc >= 2 && args_buf[1] == "--help")) {
+		if cmd != nil &&
+		   (cmd.name != "exec" || (argc >= 2 && args_buf[1] == "--help")) &&
+		   (cmd.name != "run"  || (argc >= 2 && args_buf[1] == "--help")) {
 			for i := 1; i < argc; i += 1 {
 				if args_buf[i] == "--help" {
 					want_help = true
@@ -1336,8 +1497,10 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 			}
 			if cmd != nil {
 				rc = shell_dispatch(cmd, &cmd_ctx)
-			} else {
+			} else if prg_ok {
 				rc = prg_exec_file(prg_path, &cmd_ctx)
+			} else {
+				rc = script_exec_file(script_path, args_buf[1:argc], &cur_out)
 			}
 		}
 
@@ -1347,6 +1510,7 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 		prev_arena = cur_arena
 		prev_out   = cur_out
 		has_prev   = true
+		last_rc    = rc
 
 		if rc != 0 {
 			break
@@ -1354,9 +1518,19 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 	}
 
 	if has_prev {
-		out_put_bytes(ob_bytes(&prev_out))
+		if sink != nil {
+			ob_put_bytes(sink, ob_bytes(&prev_out))
+		} else {
+			out_put_bytes(ob_bytes(&prev_out))
+		}
 		arena_destroy(&prev_arena)
 	}
+	g_last_status = last_rc
+	return last_rc
+}
+
+shell_exec_line :: proc "contextless" (raw_line: []u8) {
+	_ = shell_exec_line_out(raw_line, nil)
 }
 
 g_history:    [SHELL_MAX_HIST][SHELL_MAX_LINE]u8
