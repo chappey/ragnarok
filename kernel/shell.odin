@@ -1,6 +1,8 @@
 package kernel
 
 import "base:runtime"
+import "syscalls"
+import "../userspace"
 
 // Unified command interface + pipe-capable shell ('rsh') backed by per-stage PMM Arenas.
 // Syntax: cmd arg1 "quoted arg" --flag | cmd2 # comment
@@ -178,10 +180,38 @@ g_commands := [24]Command{
 // Shared formatting / parsing helpers
 // ---------------------------------------------------------------------------
 
+g_syscalls := syscalls.Table{
+	clear          = gfx_clear,
+	plot           = gfx_plot,
+	hline          = gfx_hline,
+	line           = gfx_line,
+	rect           = gfx_rect,
+	disc           = gfx_disc,
+	char           = gfx_char,
+	text           = gfx_text,
+	present        = gfx_present,
+	set_palette    = gfx_set_palette,
+	reset_palette  = gfx_reset_palette,
+	wait_ms_or_key = pit_wait_ms_or_key_char,
+	rng_next       = rng_next,
+	isin           = isin,
+	icos           = icos,
+	print          = out_puts,
+}
+
 shell_find_cmd :: proc "contextless" (name: string) -> ^Command {
 	for i := 0; i < len(g_commands); i += 1 {
 		if g_commands[i].name == name {
 			return &g_commands[i]
+		}
+	}
+	return nil
+}
+
+shell_find_app :: proc "contextless" (name: string) -> ^syscalls.App_Info {
+	for i := 0; i < len(userspace.g_apps); i += 1 {
+		if userspace.g_apps[i].name == name {
+			return &userspace.g_apps[i]
 		}
 	}
 	return nil
@@ -303,19 +333,26 @@ write_hex_dump :: proc "contextless" (ob: ^Out_Buf, data: []u8, base_addr: u64) 
 
 cmd_help :: proc(ctx: ^Cmd_Context) -> int {
 	if len(ctx.args) >= 2 {
-		c := shell_find_cmd(ctx.args[1])
-		if c == nil {
-			ob_puts(ctx.out, "help: unknown command '")
-			ob_puts(ctx.out, ctx.args[1])
-			ob_puts(ctx.out, "'\n")
-			return 1
+		if c := shell_find_cmd(ctx.args[1]); c != nil {
+			ob_puts(ctx.out, "Usage: ")
+			ob_puts(ctx.out, c.usage)
+			ob_puts(ctx.out, "\n  ")
+			ob_puts(ctx.out, c.summary)
+			ob_puts(ctx.out, "\n")
+			return 0
 		}
-		ob_puts(ctx.out, "Usage: ")
-		ob_puts(ctx.out, c.usage)
-		ob_puts(ctx.out, "\n  ")
-		ob_puts(ctx.out, c.summary)
-		ob_puts(ctx.out, "\n")
-		return 0
+		if a := shell_find_app(ctx.args[1]); a != nil {
+			ob_puts(ctx.out, "Usage: ")
+			ob_puts(ctx.out, a.usage)
+			ob_puts(ctx.out, "  [userspace]\n  ")
+			ob_puts(ctx.out, a.summary)
+			ob_puts(ctx.out, "\n")
+			return 0
+		}
+		ob_puts(ctx.out, "help: unknown command '")
+		ob_puts(ctx.out, ctx.args[1])
+		ob_puts(ctx.out, "'\n")
+		return 1
 	}
 
 	ob_puts(ctx.out, "Ragnarok commands (pass --help to any command, use | to pipe):\n")
@@ -327,6 +364,17 @@ cmd_help :: proc(ctx: ^Cmd_Context) -> int {
 			ob_putc(ctx.out, ' ')
 		}
 		ob_puts(ctx.out, c.summary)
+		ob_putc(ctx.out, '\n')
+	}
+	ob_puts(ctx.out, "Userspace demos (ESC / q / Enter to exit):\n")
+	for i := 0; i < len(userspace.g_apps); i += 1 {
+		a := &userspace.g_apps[i]
+		ob_puts(ctx.out, "  ")
+		ob_puts(ctx.out, a.name)
+		for pad := len(a.name); pad < 10; pad += 1 {
+			ob_putc(ctx.out, ' ')
+		}
+		ob_puts(ctx.out, a.summary)
 		ob_putc(ctx.out, '\n')
 	}
 	return 0
@@ -876,6 +924,16 @@ shell_dispatch :: proc "contextless" (cmd: ^Command, ctx: ^Cmd_Context) -> int {
 	return cmd.run(ctx)
 }
 
+shell_dispatch_app :: proc "contextless" (app: ^syscalls.App_Info, a: ^Arena, args: []string) -> int {
+	rt_ctx: runtime.Context
+	rt_ctx.allocator      = arena_allocator(a)
+	rt_ctx.temp_allocator = arena_allocator(a)
+	context = rt_ctx
+	rc := app.run(&g_syscalls, args)
+	con_flush()
+	return rc
+}
+
 shell_trim_ws :: proc "contextless" (s: []u8) -> []u8 {
 	a := 0
 	b := len(s)
@@ -1020,7 +1078,8 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 		}
 
 		cmd := shell_find_cmd(args_buf[0])
-		if cmd == nil {
+		app := shell_find_app(args_buf[0]) if cmd == nil else nil
+		if cmd == nil && app == nil {
 			con_set_color(COL_LTRED, COL_BLACK)
 			out_puts("Unknown command: ")
 			out_puts(args_buf[0])
@@ -1042,12 +1101,14 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 
 		rc := 0
 		if want_help {
+			usage_str   := cmd.usage if cmd != nil else app.usage
+			summary_str := cmd.summary if cmd != nil else app.summary
 			ob_puts(&cur_out, "Usage: ")
-			ob_puts(&cur_out, cmd.usage)
+			ob_puts(&cur_out, usage_str)
 			ob_puts(&cur_out, "\n  ")
-			ob_puts(&cur_out, cmd.summary)
+			ob_puts(&cur_out, summary_str)
 			ob_putc(&cur_out, '\n')
-		} else {
+		} else if cmd != nil {
 			in_slice: []u8 = nil
 			if has_prev {
 				in_slice = ob_bytes(&prev_out)
@@ -1059,6 +1120,8 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 				arena  = &cur_arena,
 			}
 			rc = shell_dispatch(cmd, &cmd_ctx)
+		} else {
+			rc = shell_dispatch_app(app, &cur_arena, args_buf[:argc])
 		}
 
 		if has_prev {

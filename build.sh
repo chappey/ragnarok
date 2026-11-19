@@ -136,6 +136,7 @@ try:
                     b"echo foo bar\x17baz\n"
                     b"\x1b[A\n"
                     b"history\n"
+                    b"matrix\nqstarfield\nqspiro\nqc64\nq"
                     b"mem\nhalt\n"
                 )
                 proc.stdin.flush()

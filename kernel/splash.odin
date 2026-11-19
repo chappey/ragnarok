@@ -47,8 +47,8 @@ rng_next :: proc "contextless" () -> u32 {
 }
 
 // Wait up to `ms` milliseconds using PIT Channel 2 (1.193182 MHz),
-// returning early if any PS/2 or COM1 key is pressed.
-pit_wait_ms_or_key :: proc "contextless" (ms: u32) -> bool {
+// returning early with the pressed key if any xHCI/PS/2/COM1 key arrives.
+pit_wait_ms_or_key_char :: proc "contextless" (ms: u32) -> (u8, bool) {
 	rem := ms
 	for rem > 0 {
 		chunk := rem if rem < 40 else 40
@@ -64,19 +64,24 @@ pit_wait_ms_or_key :: proc "contextless" (ms: u32) -> bool {
 		arch_outb(0x42, u8((ticks >> 8) & 0xFF))
 
 		for (arch_inb(0x61) & 0x20) == 0 {
-			if _, ok := xhci_poll_char(); ok {
-				return true
+			if k, ok := xhci_poll_char(); ok {
+				return k, true
 			}
-			if _, ok := ps2_poll_char(); ok {
-				return true
+			if k, ok := ps2_poll_char(); ok {
+				return k, true
 			}
-			if _, ok := serial_poll_char(); ok {
-				return true
+			if k, ok := serial_poll_char(); ok {
+				return k, true
 			}
 			arch_pause()
 		}
 	}
-	return false
+	return 0, false
+}
+
+pit_wait_ms_or_key :: proc "contextless" (ms: u32) -> bool {
+	_, ok := pit_wait_ms_or_key_char(ms)
+	return ok
 }
 
 splash_build_sky :: proc "contextless" () {
