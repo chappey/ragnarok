@@ -66,12 +66,3 @@ Table :: struct {
 }
 
 Prg_Entry :: #type proc "c" (sys: ^Table, ctx: ^Cmd_Context) -> i32
-
-App_Proc :: #type proc(sys: ^Table, args: []string) -> int
-
-App_Info :: struct {
-	name:    string,
-	summary: string,
-	usage:   string,
-	run:     App_Proc,
-}

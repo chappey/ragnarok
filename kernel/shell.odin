@@ -1,8 +1,6 @@
 package kernel
 
 import "base:runtime"
-import "syscalls"
-import "../userspace"
 
 // Unified command interface + pipe-capable shell ('rsh') backed by per-stage PMM Arenas.
 // Syntax: cmd arg1 "quoted arg" --flag | cmd2 # comment
@@ -267,15 +265,6 @@ shell_find_cmd :: proc "contextless" (name: string) -> ^Command {
 	return nil
 }
 
-shell_find_app :: proc "contextless" (name: string) -> ^syscalls.App_Info {
-	for i := 0; i < len(userspace.g_apps); i += 1 {
-		if userspace.g_apps[i].name == name {
-			return &userspace.g_apps[i]
-		}
-	}
-	return nil
-}
-
 ascii_contains_ci :: proc "contextless" (haystack, needle: []u8) -> bool {
 	if len(needle) == 0 {
 		return true
@@ -400,13 +389,14 @@ cmd_help :: proc(ctx: ^Cmd_Context) -> int {
 			ob_puts(ctx.out, "\n")
 			return 0
 		}
-		if a := shell_find_app(ctx.args[1]); a != nil {
-			ob_puts(ctx.out, "Usage: ")
-			ob_puts(ctx.out, a.usage)
-			ob_puts(ctx.out, "  [userspace]\n  ")
-			ob_puts(ctx.out, a.summary)
-			ob_puts(ctx.out, "\n")
-			return 0
+		if prg_path, ok := prg_resolve_path(ctx.args[1], ctx.arena); ok {
+			help_args := [2]string{ctx.args[1], "--help"}
+			sub_ctx := Cmd_Context{
+				args  = help_args[:],
+				out   = ctx.out,
+				arena = ctx.arena,
+			}
+			return prg_exec_file(prg_path, &sub_ctx)
 		}
 		ob_puts(ctx.out, "help: unknown command '")
 		ob_puts(ctx.out, ctx.args[1])
@@ -425,16 +415,26 @@ cmd_help :: proc(ctx: ^Cmd_Context) -> int {
 		ob_puts(ctx.out, c.summary)
 		ob_putc(ctx.out, '\n')
 	}
-	ob_puts(ctx.out, "Userspace demos (ESC / q / Enter to exit):\n")
-	for i := 0; i < len(userspace.g_apps); i += 1 {
-		a := &userspace.g_apps[i]
-		ob_puts(ctx.out, "  ")
-		ob_puts(ctx.out, a.name)
-		for pad := len(a.name); pad < 10; pad += 1 {
-			ob_putc(ctx.out, ' ')
+
+	if entries, ok := fat32_list_dir(transmute([]u8)string("/BIN"), ctx.arena); ok {
+		printed_hdr := false
+		for i := 0; i < len(entries); i += 1 {
+			e := &entries[i]
+			if e.is_dir {
+				continue
+			}
+			name := string(e.name[:e.name_len])
+			if !prg_has_ext(name) {
+				continue
+			}
+			if !printed_hdr {
+				ob_puts(ctx.out, "Programs in /BIN (run by name or 'exec <path>'):\n")
+				printed_hdr = true
+			}
+			ob_puts(ctx.out, "  ")
+			ob_puts(ctx.out, name)
+			ob_putc(ctx.out, '\n')
 		}
-		ob_puts(ctx.out, a.summary)
-		ob_putc(ctx.out, '\n')
 	}
 	return 0
 }
@@ -1125,16 +1125,6 @@ shell_dispatch :: proc "contextless" (cmd: ^Command, ctx: ^Cmd_Context) -> int {
 	return cmd.run(ctx)
 }
 
-shell_dispatch_app :: proc "contextless" (app: ^syscalls.App_Info, a: ^Arena, args: []string) -> int {
-	rt_ctx: runtime.Context
-	rt_ctx.allocator      = arena_allocator(a)
-	rt_ctx.temp_allocator = arena_allocator(a)
-	context = rt_ctx
-	rc := app.run(&g_syscalls, args)
-	con_flush()
-	return rc
-}
-
 shell_trim_ws :: proc "contextless" (s: []u8) -> []u8 {
 	a := 0
 	b := len(s)
@@ -1299,13 +1289,12 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 		}
 
 		cmd := shell_find_cmd(args_buf[0])
-		app := shell_find_app(args_buf[0]) if cmd == nil else nil
 		prg_path := ""
 		prg_ok   := false
-		if cmd == nil && app == nil {
+		if cmd == nil {
 			prg_path, prg_ok = prg_resolve_path(args_buf[0], &cur_arena)
 		}
-		if cmd == nil && app == nil && !prg_ok {
+		if cmd == nil && !prg_ok {
 			con_set_color(COL_LTRED, COL_BLACK)
 			out_puts("Unknown command: ")
 			out_puts(args_buf[0])
@@ -1318,7 +1307,7 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 		}
 
 		want_help := false
-		if (cmd != nil && (cmd.name != "exec" || (argc >= 2 && args_buf[1] == "--help"))) || app != nil {
+		if cmd != nil && (cmd.name != "exec" || (argc >= 2 && args_buf[1] == "--help")) {
 			for i := 1; i < argc; i += 1 {
 				if args_buf[i] == "--help" {
 					want_help = true
@@ -1329,14 +1318,12 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 
 		rc := 0
 		if want_help {
-			usage_str   := cmd.usage if cmd != nil else app.usage
-			summary_str := cmd.summary if cmd != nil else app.summary
 			ob_puts(&cur_out, "Usage: ")
-			ob_puts(&cur_out, usage_str)
+			ob_puts(&cur_out, cmd.usage)
 			ob_puts(&cur_out, "\n  ")
-			ob_puts(&cur_out, summary_str)
+			ob_puts(&cur_out, cmd.summary)
 			ob_putc(&cur_out, '\n')
-		} else if cmd != nil || prg_ok {
+		} else {
 			in_slice: []u8 = nil
 			if has_prev {
 				in_slice = ob_bytes(&prev_out)
@@ -1352,8 +1339,6 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 			} else {
 				rc = prg_exec_file(prg_path, &cmd_ctx)
 			}
-		} else {
-			rc = shell_dispatch_app(app, &cur_arena, args_buf[:argc])
 		}
 
 		if has_prev {

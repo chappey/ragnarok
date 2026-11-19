@@ -56,6 +56,45 @@ build() {
         "$BUILD_DIR/arch.obj"
 
     echo "Built $EFI_OUT ($(stat -c%s "$EFI_OUT") bytes)"
+    build_userspace
+}
+
+build_userspace() {
+    mkdir -p "$BUILD_DIR/bin"
+    rm -f "$BUILD_DIR/bin"/*.PRG "$BUILD_DIR/bin"/*.obj
+
+    echo "[4/4] Building standalone userspace .prg executables..."
+    nasm -f win64 "$SCRIPT_DIR/userspace/crt0.asm" -o "$BUILD_DIR/prg_crt0.obj"
+
+    local app_dir app_name obj prg
+    for app_dir in "$SCRIPT_DIR/userspace/apps"/*/; do
+        [[ -d "$app_dir" ]] || continue
+        app_name="$(basename "$app_dir" | tr '[:lower:]' '[:upper:]')"
+        obj="$BUILD_DIR/bin/${app_name}.obj"
+        prg="$BUILD_DIR/bin/${app_name}.PRG"
+        odin build "$app_dir" \
+            -target:freestanding_amd64_win64 \
+            -build-mode:obj \
+            -o:size \
+            -no-crt \
+            -no-entry-point \
+            -default-to-nil-allocator \
+            -no-thread-local \
+            -disable-red-zone \
+            -out:"$obj"
+        lld-link \
+            /subsystem:efi_application \
+            /entry:prg_main \
+            /nodefaultlib \
+            /fixed:no \
+            /dynamicbase \
+            /opt:ref \
+            /opt:icf \
+            /out:"$prg" \
+            "$obj" \
+            "$BUILD_DIR/prg_crt0.obj"
+        echo "  Built $prg ($(stat -c%s "$prg") bytes)"
+    done
 }
 
 ensure_disk_imgs() {
@@ -63,14 +102,17 @@ ensure_disk_imgs() {
     local img="$BUILD_DIR/ragnarok.img"
     local nvme_img="$BUILD_DIR/nvme.img"
 
-    # Rebuild bootable 64 MiB GPT/FAT32 ESP + WELCOME.TXT
+    # Rebuild bootable 64 MiB GPT/FAT32 ESP + /BIN/*.PRG + WELCOME.TXT
     rm -f "$img"
     truncate -s 64M "$img"
     printf 'label: gpt\nstart=2048, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="RAGNAROK_ESP"\n' \
         | sfdisk -q "$img"
     mformat -i "$img@@1M" -F -v RAGNAROK ::
-    mmd     -i "$img@@1M" ::/EFI ::/EFI/BOOT
+    mmd     -i "$img@@1M" ::/EFI ::/EFI/BOOT ::/BIN
     mcopy   -i "$img@@1M" "$EFI_OUT" ::/EFI/BOOT/BOOTX64.EFI
+    if compgen -G "$BUILD_DIR/bin/*.PRG" >/dev/null; then
+        mcopy -i "$img@@1M" "$BUILD_DIR/bin"/*.PRG ::/BIN/
+    fi
     printf 'Welcome to Ragnarok OS (x86_64 Ring-0, Odin + Direct UEFI)!\nRead directly via AHCI/NVMe DMA + GPT + FAT32.\n' \
         | mcopy -i "$img@@1M" - ::/WELCOME.TXT
 
@@ -128,7 +170,7 @@ proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stde
 
 buf = b""
 sent = False
-deadline = time.monotonic() + 15.0
+deadline = time.monotonic() + 20.0
 try:
     while time.monotonic() < deadline:
         r, _, _ = select.select([proc.stdout], [], [], 0.2)
@@ -143,10 +185,13 @@ try:
                 sent = True
                 # First newline exits live animated splash into shell
                 proc.stdin.write(
-                    b"\nsys\nrtc\nuptime\nselftest\ndmesg | find PMM\ntime echo bench\nmem\npci | head 3\ndisks\ndf\nls\nls /EFI/BOOT\nmount 1\nread NVME.TXT\nmount 0\n"
+                    b"\nsys\nrtc\nuptime\nselftest\ndmesg | find PMM\ntime echo bench\nmem\npci | head 3\ndisks\ndf\nls\nls /EFI/BOOT\nls /BIN\n"
+                    b"mount 1\nread NVME.TXT\nmount 0\n"
                     b"mkdir TESTDIR\ncd TESTDIR\npwd\n"
                     b"write A.TXT subfile\ncopy A.TXT B.TXT\nmove B.TXT C.TXT\n"
                     b"read /TESTDIR/C.TXT\ndel A.TXT\ndel C.TXT\ncd ..\nrmdir TESTDIR\n"
+                    b"tree / | find PRG\nexec /BIN/TREE.PRG /EFI\n"
+                    b"note NTEST.TXT first line\necho second line | note NTEST.TXT\nnote NTEST.TXT | count\nread NTEST.TXT\ndel NTEST.TXT\n"
                     b"read WELCOME.TXT | find AHCI\nread WELCOME.TXT | count\n"
                     b"echo hello | hex\n"
                     b"echo foo bar\x17baz\n"
@@ -184,6 +229,13 @@ required = [
     b"Arena test: PASS",
     b"Hello from NVMe SSD",
     b"ACPI PM1a_CNT=",
+    b"[PRG] MATRIX.PRG",
+    b"[PRG] TREE.PRG",
+    b"[PRG] NOTE.PRG",
+    b"STARFIELD.PRG",
+    b"Appended",
+    b"first line",
+    b"second line",
 ]
 for needle in required:
     if needle not in buf:
