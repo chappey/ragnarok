@@ -3,32 +3,32 @@ package kernel
 // Logical TempleOS-compatible 640x480 16-color indexed canvas,
 // integer-scaled through a mutable 16-entry LUT onto the physical UEFI GOP framebuffer.
 
-GFX_WIDTH  :: 640
+GFX_WIDTH :: 640
 GFX_HEIGHT :: 480
-GFX_COLS   :: GFX_WIDTH / 8   // 80 columns
-GFX_ROWS   :: GFX_HEIGHT / 8  // 60 rows
+GFX_COLS :: GFX_WIDTH / 8 // 80 columns
+GFX_ROWS :: GFX_HEIGHT / 8 // 60 rows
 
 // Standard TempleOS / IBM VGA 16-color palette indices
-COL_BLACK       :: u8(0)
-COL_BLUE        :: u8(1)
-COL_GREEN       :: u8(2)
-COL_CYAN        :: u8(3)
-COL_RED         :: u8(4)
-COL_PURPLE      :: u8(5)
-COL_BROWN       :: u8(6)
-COL_LTGRAY      :: u8(7)
-COL_DKGRAY      :: u8(8)
-COL_LTBLUE      :: u8(9)
-COL_LTGREEN     :: u8(10)
-COL_LTCYAN      :: u8(11)
-COL_LTRED       :: u8(12)
-COL_LTPURPLE    :: u8(13)
-COL_YELLOW      :: u8(14)
-COL_WHITE       :: u8(15)
+COL_BLACK :: u8(0)
+COL_BLUE :: u8(1)
+COL_GREEN :: u8(2)
+COL_CYAN :: u8(3)
+COL_RED :: u8(4)
+COL_PURPLE :: u8(5)
+COL_BROWN :: u8(6)
+COL_LTGRAY :: u8(7)
+COL_DKGRAY :: u8(8)
+COL_LTBLUE :: u8(9)
+COL_LTGREEN :: u8(10)
+COL_LTCYAN :: u8(11)
+COL_LTRED :: u8(12)
+COL_LTPURPLE :: u8(13)
+COL_YELLOW :: u8(14)
+COL_WHITE :: u8(15)
 COL_TRANSPARENT :: u8(255)
 
 // Classic TempleOS / VGA 16-color LUT (0x00RRGGBB, matches UEFI GOP BGRX8 little-endian)
-PALETTE_TEMPLEOS :: [16]u32{
+PALETTE_TEMPLEOS :: [16]u32 {
 	0x00000000, // 0  BLACK
 	0x000000AA, // 1  BLUE
 	0x0000AA00, // 2  GREEN
@@ -47,8 +47,8 @@ PALETTE_TEMPLEOS :: [16]u32{
 	0x00FFFFFF, // 15 WHITE
 }
 
-// Alternate Nordic dusk LUT (example runtime LUT swap)
-PALETTE_NORSE :: [16]u32{
+// Nordic dusk LUT
+PALETTE_NORSE :: [16]u32 {
 	0x000B0E14, // 0  deep night
 	0x001B2B4B, // 1  fjord blue
 	0x002B5B3E, // 2  pine green
@@ -77,15 +77,15 @@ Framebuffer :: struct {
 	off_y:  u32, // vertical centering offset in physical pixels
 }
 
-g_fb:      Framebuffer
-g_canvas:  [GFX_WIDTH * GFX_HEIGHT]u8
+g_fb: Framebuffer
+g_canvas: [GFX_WIDTH * GFX_HEIGHT]u8
 g_palette: [16]u32
 
 gfx_init :: proc "contextless" (base: [^]u32, width, height, pitch: u32) {
-	g_fb.base   = base
-	g_fb.width  = width
+	g_fb.base = base
+	g_fb.width = width
 	g_fb.height = height
-	g_fb.pitch  = pitch
+	g_fb.pitch = pitch
 
 	sx := width / GFX_WIDTH
 	sy := height / GFX_HEIGHT
@@ -138,14 +138,14 @@ gfx_present :: proc "contextless" () {
 	}
 	scale := g_fb.scale
 	pitch := g_fb.pitch
-	ox    := g_fb.off_x
-	oy    := g_fb.off_y
+	ox := g_fb.off_x
+	oy := g_fb.off_y
 
 	if scale == 1 {
 		max_y := u32(GFX_HEIGHT)
-		if g_fb.height < max_y { max_y = g_fb.height }
+		if g_fb.height < max_y {max_y = g_fb.height}
 		max_x := u32(GFX_WIDTH)
-		if g_fb.width < max_x { max_x = g_fb.width }
+		if g_fb.width < max_x {max_x = g_fb.width}
 
 		for y := u32(0); y < max_y; y += 1 {
 			src_row := y * GFX_WIDTH
@@ -156,15 +156,15 @@ gfx_present :: proc "contextless" () {
 		}
 	} else if scale == 2 {
 		for y := u32(0); y < GFX_HEIGHT; y += 1 {
-			src_row  := y * GFX_WIDTH
+			src_row := y * GFX_WIDTH
 			dst_row0 := (oy + y * 2) * pitch + ox
 			dst_row1 := dst_row0 + pitch
 			for x := u32(0); x < GFX_WIDTH; x += 1 {
 				c := g_palette[g_canvas[src_row + x] & 15]
 				dx := x * 2
-				g_fb.base[dst_row0 + dx]     = c
+				g_fb.base[dst_row0 + dx] = c
 				g_fb.base[dst_row0 + dx + 1] = c
-				g_fb.base[dst_row1 + dx]     = c
+				g_fb.base[dst_row1 + dx] = c
 				g_fb.base[dst_row1 + dx + 1] = c
 			}
 		}
@@ -211,8 +211,8 @@ gfx_hline :: proc "contextless" (x0, x1, y: i32, col: u8) {
 	if b < 0 || a >= GFX_WIDTH {
 		return
 	}
-	if a < 0 { a = 0 }
-	if b >= GFX_WIDTH { b = GFX_WIDTH - 1 }
+	if a < 0 {a = 0}
+	if b >= GFX_WIDTH {b = GFX_WIDTH - 1}
 	c := col & 15
 	row := u32(y) * GFX_WIDTH
 	for x := a; x <= b; x += 1 {
@@ -231,10 +231,10 @@ gfx_rect :: proc "contextless" (x, y, w, h: i32, col: u8) {
 	if x1 < 0 || y1 < 0 || x0 >= GFX_WIDTH || y0 >= GFX_HEIGHT {
 		return
 	}
-	if x0 < 0 { x0 = 0 }
-	if y0 < 0 { y0 = 0 }
-	if x1 >= GFX_WIDTH { x1 = GFX_WIDTH - 1 }
-	if y1 >= GFX_HEIGHT { y1 = GFX_HEIGHT - 1 }
+	if x0 < 0 {x0 = 0}
+	if y0 < 0 {y0 = 0}
+	if x1 >= GFX_WIDTH {x1 = GFX_WIDTH - 1}
+	if y1 >= GFX_HEIGHT {y1 = GFX_HEIGHT - 1}
 	c := col & 15
 	for cy := y0; cy <= y1; cy += 1 {
 		row := u32(cy) * GFX_WIDTH
@@ -249,9 +249,9 @@ gfx_line :: proc "contextless" (x0, y0, x1, y1: i32, col: u8) {
 	cx := x0
 	cy := y0
 	dx := x1 - x0
-	if dx < 0 { dx = -dx }
+	if dx < 0 {dx = -dx}
 	dy := y1 - y0
-	if dy < 0 { dy = -dy }
+	if dy < 0 {dy = -dy}
 	sx := i32(1) if x0 < x1 else i32(-1)
 	sy := i32(1) if y0 < y1 else i32(-1)
 	err := dx - dy
@@ -328,15 +328,47 @@ gfx_text :: proc "contextless" (x, y: i32, s: string, fg, bg: u8) {
 
 // Boot splash showcasing the 640x480 16-color Bayer-dithered twilight sky,
 // Blood Eclipse, chiseled RAGNARÖK title, and live 16-color palette bar.
-g_rag_title_font := [8 * 5]u8{
-	0x1E, 0x11, 0x1E, 0x14, 0x12, // R
-	0x0E, 0x11, 0x1F, 0x11, 0x11, // A
-	0x0E, 0x10, 0x17, 0x11, 0x0E, // G
-	0x11, 0x19, 0x15, 0x13, 0x11, // N
-	0x0E, 0x11, 0x1F, 0x11, 0x11, // A
-	0x1E, 0x11, 0x1E, 0x14, 0x12, // R
-	0x0E, 0x11, 0x11, 0x11, 0x0E, // O
-	0x11, 0x12, 0x1C, 0x12, 0x11, // K
+g_rag_title_font := [8 * 5]u8 {
+	0x1E,
+	0x11,
+	0x1E,
+	0x14,
+	0x12, // R
+	0x0E,
+	0x11,
+	0x1F,
+	0x11,
+	0x11, // A
+	0x0E,
+	0x10,
+	0x17,
+	0x11,
+	0x0E, // G
+	0x11,
+	0x19,
+	0x15,
+	0x13,
+	0x11, // N
+	0x0E,
+	0x11,
+	0x1F,
+	0x11,
+	0x11, // A
+	0x1E,
+	0x11,
+	0x1E,
+	0x14,
+	0x12, // R
+	0x0E,
+	0x11,
+	0x11,
+	0x11,
+	0x0E, // O
+	0x11,
+	0x12,
+	0x1C,
+	0x12,
+	0x11, // K
 }
 
 gfx_draw_splash :: proc "contextless" () {
@@ -417,6 +449,12 @@ gfx_draw_splash :: proc "contextless" () {
 	for i := i32(0); i < 16; i += 1 {
 		gfx_rect(16 + i * 38, 434, 34, 16, u8(i))
 	}
-	gfx_text(16, 458, "RAGNAROK OS | 640x480x16 LOGICAL CANVAS | ODIN RING-0 UEFI", COL_YELLOW, COL_TRANSPARENT)
+	gfx_text(
+		16,
+		458,
+		"RAGNAROK OS | 640x480x16 LOGICAL CANVAS | ODIN RING-0 UEFI",
+		COL_YELLOW,
+		COL_TRANSPARENT,
+	)
 	gfx_present()
 }
