@@ -94,6 +94,7 @@ efi_main :: proc "c" (image_handle: EFI_Handle, st: ^EFI_System_Table) -> EFI_St
 	ahci_init()
 	nvme_init()
 	_ = fat32_mount_first()
+	xhci_init()
 	gfx_init(fb_base, fb_w, fb_h, fb_pitch)
 	ps2_init()
 	con_init()
@@ -103,6 +104,9 @@ efi_main :: proc "c" (image_handle: EFI_Handle, st: ^EFI_System_Table) -> EFI_St
 
 input_getc :: proc "contextless" () -> u8 {
 	for {
+		if ch, ok := xhci_poll_char(); ok {
+			return ch
+		}
 		if ch, ok := ps2_poll_char(); ok {
 			return ch
 		}
@@ -138,13 +142,21 @@ kernel_main :: proc "contextless" (map_size, desc_size: uintptr) {
 	out_put_u64(u64(g_fb.off_y))
 	out_puts(")\n")
 
-	out_puts("Input:  PS/2=")
+	out_puts("Input:  USB=")
+	if g_xhci.kbd_ready {
+		out_puts("kbd")
+	} else if g_xhci.present {
+		out_puts("xhci")
+	} else {
+		out_puts("no")
+	}
+	out_puts("  PS/2=")
 	out_puts("yes" if g_ps2_present else "no")
 	out_puts("  COM1=")
 	out_puts("yes" if g_serial_present else "no")
 	out_puts("  RAM=")
 	out_put_u64((g_pmm_free_pages * PAGE_SIZE) / (1024 * 1024))
-	out_puts(" MiB  PCI=")
+	out_puts("M  PCI=")
 	out_put_u64(u64(g_pci_count))
 	out_puts("  BLK=")
 	out_put_u64(u64(g_block_count))

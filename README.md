@@ -16,5 +16,7 @@ A Ring-0 x86_64 operating system written in freestanding Odin, booting directly 
 ## Architecture
 - **Boot**: Direct UEFI (`freestanding_amd64_win64` + `lld-link /subsystem:efi_application`)
 - **Execution model**: Ring-0 single identity-mapped 64-bit address space
+- **Memory**: UEFI memory-map 4 KiB page-frame bitmap PMM (contiguous DMA allocations)
 - **Graphics**: Logical `640×480` 16-color indexed canvas with mutable LUT, integer-scaled to UEFI GOP
-- **Console & Input**: 80×60 on-screen console + PS/2 keyboard + COM1 UART (`0x3F8`)
+- **Storage**: Unified `Block_Device` with polling AHCI (SATA) & NVMe SSD drivers + GPT/FAT32 reader
+- **Input & Console**: Polling xHCI (USB 3.0) HID Boot keyboard + PS/2 i8042 + COM1 UART + 80×60 console

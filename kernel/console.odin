@@ -93,8 +93,12 @@ con_putc_raw :: proc "contextless" (c: u8) {
 con_draw_status_bar :: proc "contextless" () {
 	gfx_rect(0, 0, GFX_WIDTH, 8, COL_BLUE)
 	gfx_text(8, 0, "RAGNAROK OS v0.1 | 640x480x16 | RING-0 UEFI", COL_YELLOW, COL_BLUE)
-	if g_ps2_present {
-		gfx_text(GFX_WIDTH - 104, 0, "[PS/2 READY]", COL_LTGREEN, COL_BLUE)
+	if g_xhci.kbd_ready && g_ps2_present {
+		gfx_text(GFX_WIDTH - 104, 0, "[USB+PS/2 OK]", COL_LTGREEN, COL_BLUE)
+	} else if g_xhci.kbd_ready {
+		gfx_text(GFX_WIDTH - 104, 0, "[USB KBD OK] ", COL_LTGREEN, COL_BLUE)
+	} else if g_ps2_present {
+		gfx_text(GFX_WIDTH - 104, 0, "[PS/2 READY] ", COL_LTGREEN, COL_BLUE)
 	} else {
 		gfx_text(GFX_WIDTH - 104, 0, "[SERIAL ONLY]", COL_LTRED, COL_BLUE)
 	}

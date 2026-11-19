@@ -85,6 +85,8 @@ qemu_base_args() {
         -device "ide-hd,drive=esp,bus=ahci.0,bootindex=1"
         -drive "if=none,id=nvmedisk,format=raw,file=$BUILD_DIR/nvme.img"
         -device "nvme,serial=RAGNAROK0,drive=nvmedisk"
+        -device "qemu-xhci,id=xhci"
+        -device "usb-kbd,bus=xhci.0"
     )
 }
 
@@ -134,10 +136,10 @@ finally:
         proc.terminate()
     proc.wait(timeout=5)
 
-if b"RAGNAROK_READY" not in buf or b"Welcome to Ragnarok OS" not in buf:
-    print("FAIL: expected boot banner and FAT32 WELCOME.TXT output", file=sys.stderr)
+if b"RAGNAROK_READY" not in buf or b"Welcome to Ragnarok OS" not in buf or b"USB=kbd" not in buf:
+    print("FAIL: expected boot banner, USB=kbd, and FAT32 WELCOME.TXT output", file=sys.stderr)
     sys.exit(1)
-print("\nPASS: Ragnarök booted via Direct UEFI -> Ring-0 -> AHCI+NVMe+FAT32 -> ACPI poweroff")
+print("\nPASS: Ragnarök booted via Direct UEFI -> Ring-0 -> xHCI+AHCI+NVMe+FAT32 -> ACPI poweroff")
 PY
 }
 

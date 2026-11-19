@@ -64,6 +64,9 @@ pit_wait_ms_or_key :: proc "contextless" (ms: u32) -> bool {
 		arch_outb(0x42, u8((ticks >> 8) & 0xFF))
 
 		for (arch_inb(0x61) & 0x20) == 0 {
+			if _, ok := xhci_poll_char(); ok {
+				return true
+			}
 			if _, ok := ps2_poll_char(); ok {
 				return true
 			}
