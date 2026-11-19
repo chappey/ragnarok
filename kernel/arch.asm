@@ -58,9 +58,13 @@ arch_reboot:
 
 global arch_poweroff
 arch_poweroff:
-    ; QEMU PIIX4 / Q35 ACPI S5 poweroff
-    mov dx, 0x604
+    ; QEMU / OVMF ACPI S5 poweroff across PIIX4 (0x404), Q35 (0x604), and Bochs (0xB004)
     mov ax, 0x2000
+    mov dx, 0x604
+    out dx, ax
+    mov dx, 0x404
+    out dx, ax
+    mov dx, 0xB004
     out dx, ax
     cli
 .hang:

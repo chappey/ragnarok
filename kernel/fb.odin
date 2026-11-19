@@ -115,7 +115,7 @@ gfx_init :: proc "contextless" (base: [^]u32, width, height, pitch: u32) {
 }
 
 gfx_reset_palette :: proc "contextless" () {
-	pal := PALETTE_TEMPLEOS
+	pal := PALETTE_NORSE
 	for i := 0; i < 16; i += 1 {
 		g_palette[i] = pal[i]
 	}

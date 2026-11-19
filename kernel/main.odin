@@ -207,8 +207,8 @@ shell_loop :: proc "contextless" () {
 			out_puts("  help              Show this help\n")
 			out_puts("  info              System & display info\n")
 			out_puts("  splash            Show Ragnarok twilight splash (press any key to return)\n")
-			out_puts("  palette norse     Switch LUT to Norse dusk palette\n")
-			out_puts("  palette templeos  Switch LUT to TempleOS 16-color default\n")
+			out_puts("  palette norse     Switch LUT to Norse dusk palette (default)\n")
+			out_puts("  palette templeos  Switch LUT to classic TempleOS 16-color palette\n")
 			out_puts("  clear             Clear console (or Ctrl+L)\n")
 			out_puts("  reboot            Reboot machine (i8042 / PCH CF9)\n")
 			out_puts("  halt              Power off (QEMU ACPI) or halt CPU\n")
@@ -222,9 +222,9 @@ shell_loop :: proc "contextless" () {
 			con_flush()
 			out_puts("Palette swapped -> Norse dusk LUT.\n")
 		} else if str_eq(cmd, "palette templeos") {
-			gfx_reset_palette()
+			gfx_set_palette(PALETTE_TEMPLEOS)
 			con_flush()
-			out_puts("Palette swapped -> TempleOS 16-color default LUT.\n")
+			out_puts("Palette swapped -> classic TempleOS 16-color LUT.\n")
 		} else if str_eq(cmd, "clear") {
 			con_clear()
 			con_flush()
