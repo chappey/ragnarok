@@ -279,6 +279,9 @@ try:
                     b"echo foo bar\x17baz\n"
                     b"\x1b[A\n"
                     b"history\n"
+                    b"edit EDTEST.TXT\n"
+                    b"hello ragnarok\x03\x16\x06ragnarok\n\x13\x11"
+                    b"read EDTEST.TXT\nread EDTEST.TXT | count\ndel EDTEST.TXT\n"
                     b"matrix\nqstarfield\nqspiro\nqc64\nq"
                     b"mem\nhalt\n"
                 )
@@ -323,6 +326,8 @@ required = [
     b"st=1",
     b"rsh_ok=10 arg1=hello",
     b"rsh_ok=10 arg1=piped",
+    b"[PRG] EDIT.PRG",
+    b"hello ragnarok",
 ]
 for needle in required:
     if needle not in buf:

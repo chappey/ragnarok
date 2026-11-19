@@ -709,8 +709,10 @@ xhci_process_kbd_report :: proc "contextless" () {
 			} else {
 				switch k {
 				case 0x4A: xhci_key_push(KEY_HOME)
+				case 0x4B: xhci_key_push(KEY_PGUP)
 				case 0x4C: xhci_key_push(KEY_DELETE)
 				case 0x4D: xhci_key_push(KEY_END)
+				case 0x4E: xhci_key_push(KEY_PGDN)
 				case 0x4F: xhci_key_push(KEY_RIGHT)
 				case 0x50: xhci_key_push(KEY_LEFT)
 				case 0x51: xhci_key_push(KEY_DOWN)

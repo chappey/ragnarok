@@ -3,10 +3,20 @@ package syscalls
 // Leaf syscall interface between Ragnarök kernel (Ring-0) and userspace programs.
 // Imports nothing so userspace/ never depends on kernel internals.
 
-SYSCALL_ABI_VERSION :: u32(2)
+SYSCALL_ABI_VERSION :: u32(3)
 
 GFX_WIDTH  :: 640
 GFX_HEIGHT :: 480
+
+KEY_LEFT   :: u8(0x80)
+KEY_RIGHT  :: u8(0x81)
+KEY_UP     :: u8(0x82)
+KEY_DOWN   :: u8(0x83)
+KEY_HOME   :: u8(0x84)
+KEY_END    :: u8(0x85)
+KEY_DELETE :: u8(0x86)
+KEY_PGUP   :: u8(0x87)
+KEY_PGDN   :: u8(0x88)
 
 COL_BLACK       :: u8(0)
 COL_BLUE        :: u8(1)
@@ -52,6 +62,7 @@ Table :: struct {
 	set_palette:     proc "contextless" (pal: [16]u32),
 	reset_palette:   proc "contextless" (),
 	wait_ms_or_key:  proc "contextless" (ms: u32) -> (u8, bool),
+	getc:            proc "contextless" () -> u8,
 	ticks_ms:        proc "contextless" () -> u64,
 	rng_next:        proc "contextless" () -> u32,
 	isin:            proc "contextless" (angle: i32) -> i32,

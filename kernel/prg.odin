@@ -105,6 +105,7 @@ g_syscalls := syscalls.Table{
 	set_palette    = sys_gfx_set_palette,
 	reset_palette  = sys_gfx_reset_palette,
 	wait_ms_or_key = pit_wait_ms_or_key_char,
+	getc           = input_getc,
 	ticks_ms       = sys_ticks_ms,
 	rng_next       = rng_next,
 	isin           = isin,

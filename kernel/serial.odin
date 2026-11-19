@@ -146,13 +146,15 @@ serial_poll_char :: proc "contextless" () -> (u8, bool) {
 	case 'D': return KEY_LEFT, true
 	case 'H': return KEY_HOME, true
 	case 'F': return KEY_END, true
-	case '1', '3', '4', '7', '8':
+	case '1', '3', '4', '5', '6', '7', '8':
 		b3, ok3 := serial_wait_byte()
 		if ok3 && b3 == '~' {
 			switch b2 {
 			case '1', '7': return KEY_HOME, true
 			case '3':      return KEY_DELETE, true
 			case '4', '8': return KEY_END, true
+			case '5':      return KEY_PGUP, true
+			case '6':      return KEY_PGDN, true
 			}
 		}
 	}

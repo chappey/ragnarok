@@ -13,6 +13,8 @@ KEY_DOWN   :: u8(0x83)
 KEY_HOME   :: u8(0x84)
 KEY_END    :: u8(0x85)
 KEY_DELETE :: u8(0x86)
+KEY_PGUP   :: u8(0x87)
+KEY_PGDN   :: u8(0x88)
 
 g_ps2_present:  bool
 g_ps2_shift:    bool
@@ -89,6 +91,8 @@ ps2_poll_char :: proc "contextless" () -> (u8, bool) {
 		case 0x50: return KEY_DOWN, true
 		case 0x47: return KEY_HOME, true
 		case 0x4F: return KEY_END, true
+		case 0x49: return KEY_PGUP, true
+		case 0x51: return KEY_PGDN, true
 		case 0x53: return KEY_DELETE, true
 		case 0x1C: return '\n', true
 		}
