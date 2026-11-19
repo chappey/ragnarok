@@ -4,6 +4,8 @@ foreign {
 	arch_inb      :: proc "c" (port: u16) -> u8 ---
 	arch_outb     :: proc "c" (port: u16, val: u8) ---
 	arch_outw     :: proc "c" (port: u16, val: u16) ---
+	arch_inl      :: proc "c" (port: u16) -> u32 ---
+	arch_outl     :: proc "c" (port: u16, val: u32) ---
 	arch_cli      :: proc "c" () ---
 	arch_hlt      :: proc "c" () ---
 	arch_pause    :: proc "c" () ---

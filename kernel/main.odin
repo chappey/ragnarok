@@ -89,6 +89,8 @@ efi_main :: proc "c" (image_handle: EFI_Handle, st: ^EFI_System_Table) -> EFI_St
 	}
 
 	arch_cli()
+	pmm_init(&g_mem_map_buf[0], map_size, desc_size)
+	pci_init()
 	gfx_init(fb_base, fb_w, fb_h, fb_pitch)
 	ps2_init()
 	con_init()
@@ -137,16 +139,14 @@ kernel_main :: proc "contextless" (map_size, desc_size: uintptr) {
 	out_puts("yes" if g_ps2_present else "no")
 	out_puts("  COM1=")
 	out_puts("yes" if g_serial_present else "no")
-	out_puts("  UEFI mem_descs=")
-	if desc_size > 0 {
-		out_put_u64(u64(map_size / desc_size))
-	} else {
-		out_putc('0')
-	}
-	out_puts("\n")
+	out_puts("  RAM=")
+	out_put_u64((g_pmm_free_pages * PAGE_SIZE) / (1024 * 1024))
+	out_puts(" MiB  PCI=")
+	out_put_u64(u64(g_pci_count))
+	out_puts(" devs\n")
 
 	con_set_color(COL_LTGRAY, COL_BLACK)
-	out_puts("Type 'help' for commands, 'splash' for twilight animation, 'reboot' to restart.\n\n")
+	out_puts("Type 'help', 'mem', 'lspci', 'splash', or 'reboot'.\n\n")
 
 	shell_loop()
 }
@@ -206,6 +206,8 @@ shell_loop :: proc "contextless" () {
 			out_puts("Commands:\n")
 			out_puts("  help              Show this help\n")
 			out_puts("  info              System & display info\n")
+			out_puts("  mem               Show physical RAM stats & run DMA page alloc test\n")
+			out_puts("  lspci             List discovered PCI devices\n")
 			out_puts("  splash            Show Ragnarok twilight splash (press any key to return)\n")
 			out_puts("  palette norse     Switch LUT to Norse dusk palette (default)\n")
 			out_puts("  palette templeos  Switch LUT to classic TempleOS 16-color palette\n")
@@ -214,6 +216,33 @@ shell_loop :: proc "contextless" () {
 			out_puts("  halt              Power off (QEMU ACPI) or halt CPU\n")
 		} else if str_eq(cmd, "info") {
 			out_puts("Ragnarok OS v0.1 | x86_64 Ring-0 | 640x480x16 Logical Canvas\n")
+		} else if str_eq(cmd, "mem") {
+			used := g_pmm_total_pages - g_pmm_free_pages
+			out_puts("PMM: total=")
+			out_put_u64((g_pmm_total_pages * PAGE_SIZE) / (1024 * 1024))
+			out_puts(" MiB (")
+			out_put_u64(g_pmm_total_pages)
+			out_puts(" pages), free=")
+			out_put_u64((g_pmm_free_pages * PAGE_SIZE) / (1024 * 1024))
+			out_puts(" MiB, used=")
+			out_put_u64(used)
+			out_puts(" pages\n")
+			// Quick contiguous 4-page DMA alloc/write/free self-test
+			phys := pmm_alloc_contiguous(4)
+			if phys != 0 {
+				ptr := ([^]u64)(uintptr(phys))
+				ptr[0] = 0xDEAD_BEEF_CAFE_BABE
+				ok := (ptr[0] == 0xDEAD_BEEF_CAFE_BABE)
+				pmm_free_pages(phys, 4)
+				out_puts("DMA test (4x4KiB): ")
+				out_put_hex(phys)
+				out_puts(" -> ")
+				out_puts("PASS\n" if ok else "FAIL\n")
+			} else {
+				out_puts("DMA test: OOM\n")
+			}
+		} else if str_eq(cmd, "lspci") {
+			pci_print_devices()
 		} else if str_eq(cmd, "splash") {
 			run_ragnarok_splash()
 			con_flush()

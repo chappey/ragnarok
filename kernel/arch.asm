@@ -26,6 +26,19 @@ arch_outw:
     out dx, ax
     ret
 
+global arch_inl
+arch_inl:
+    mov dx, cx
+    in eax, dx
+    ret
+
+global arch_outl
+arch_outl:
+    mov eax, edx
+    mov dx, cx
+    out dx, eax
+    ret
+
 global arch_cli
 arch_cli:
     cli

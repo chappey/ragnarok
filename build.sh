@@ -99,7 +99,7 @@ try:
             if not sent and b"RAGNAROK_READY" in buf:
                 sent = True
                 # First newline exits live animated splash into shell
-                proc.stdin.write(b"\ninfo\nhalt\n")
+                proc.stdin.write(b"\ninfo\nmem\nlspci\nhalt\n")
                 proc.stdin.flush()
         if proc.poll() is not None:
             break
