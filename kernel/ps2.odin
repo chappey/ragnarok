@@ -6,6 +6,14 @@ package kernel
 PS2_DATA   :: u16(0x60)
 PS2_STATUS :: u16(0x64)
 
+KEY_LEFT   :: u8(0x80)
+KEY_RIGHT  :: u8(0x81)
+KEY_UP     :: u8(0x82)
+KEY_DOWN   :: u8(0x83)
+KEY_HOME   :: u8(0x84)
+KEY_END    :: u8(0x85)
+KEY_DELETE :: u8(0x86)
+
 g_ps2_present:  bool
 g_ps2_shift:    bool
 g_ps2_ctrl:     bool
@@ -71,7 +79,19 @@ ps2_poll_char :: proc "contextless" () -> (u8, bool) {
 	}
 	if g_ps2_extended {
 		g_ps2_extended = false
-		// Ignore extended make/break for now (arrows/etc. can be added later)
+		if (sc & 0x80) != 0 {
+			return 0, false
+		}
+		switch sc {
+		case 0x4B: return KEY_LEFT, true
+		case 0x4D: return KEY_RIGHT, true
+		case 0x48: return KEY_UP, true
+		case 0x50: return KEY_DOWN, true
+		case 0x47: return KEY_HOME, true
+		case 0x4F: return KEY_END, true
+		case 0x53: return KEY_DELETE, true
+		case 0x1C: return '\n', true
+		}
 		return 0, false
 	}
 
@@ -110,9 +130,9 @@ ps2_poll_char :: proc "contextless" () -> (u8, bool) {
 		}
 	}
 
-	// Ctrl+L -> form feed (clear screen)
-	if g_ps2_ctrl && (ch == 'l' || ch == 'L') {
-		return 0x0C, true
+	// Ctrl+A..Z -> 0x01..0x1A (readline shortcuts)
+	if g_ps2_ctrl && ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
+		return ch & 0x1F, true
 	}
 
 	return ch, true

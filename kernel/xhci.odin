@@ -574,7 +574,7 @@ xhci_process_kbd_report :: proc "contextless" () {
 
 	for i := 0; i < 6; i += 1 {
 		k := rep[2 + i]
-		if k == 0 || k >= 64 {
+		if k == 0 {
 			continue
 		}
 		// Only emit on newly pressed keys (edge-triggered)
@@ -586,11 +586,24 @@ xhci_process_kbd_report :: proc "contextless" () {
 			}
 		}
 		if !was_down {
-			ch := g_hid_shift[k] if shift else g_hid_normal[k]
-			if ctrl && (ch == 'l' || ch == 'L') {
-				xhci_key_push(0x0C)
-			} else if ch != 0 {
-				xhci_key_push(ch)
+			if k < 64 {
+				ch := g_hid_shift[k] if shift else g_hid_normal[k]
+				if ctrl && ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
+					xhci_key_push(ch & 0x1F)
+				} else if ch != 0 {
+					xhci_key_push(ch)
+				}
+			} else {
+				switch k {
+				case 0x4A: xhci_key_push(KEY_HOME)
+				case 0x4C: xhci_key_push(KEY_DELETE)
+				case 0x4D: xhci_key_push(KEY_END)
+				case 0x4F: xhci_key_push(KEY_RIGHT)
+				case 0x50: xhci_key_push(KEY_LEFT)
+				case 0x51: xhci_key_push(KEY_DOWN)
+				case 0x52: xhci_key_push(KEY_UP)
+				case 0x58: xhci_key_push('\n')
+				}
 			}
 		}
 	}

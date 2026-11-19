@@ -103,11 +103,50 @@ serial_has_data :: proc "contextless" () -> bool {
 	return (arch_inb(COM1 + 5) & 0x01) != 0
 }
 
+serial_wait_byte :: proc "contextless" () -> (u8, bool) {
+	for i := 0; i < 4000; i += 1 {
+		if serial_has_data() {
+			return arch_inb(COM1), true
+		}
+		arch_pause()
+	}
+	return 0, false
+}
+
 serial_poll_char :: proc "contextless" () -> (u8, bool) {
 	if !serial_has_data() {
 		return 0, false
 	}
-	return arch_inb(COM1), true
+	c := arch_inb(COM1)
+	if c != 0x1B {
+		return c, true
+	}
+	b1, ok1 := serial_wait_byte()
+	if !ok1 || b1 != '[' {
+		return 0x1B, true
+	}
+	b2, ok2 := serial_wait_byte()
+	if !ok2 {
+		return 0x1B, true
+	}
+	switch b2 {
+	case 'A': return KEY_UP, true
+	case 'B': return KEY_DOWN, true
+	case 'C': return KEY_RIGHT, true
+	case 'D': return KEY_LEFT, true
+	case 'H': return KEY_HOME, true
+	case 'F': return KEY_END, true
+	case '1', '3', '4', '7', '8':
+		b3, ok3 := serial_wait_byte()
+		if ok3 && b3 == '~' {
+			switch b2 {
+			case '1', '7': return KEY_HOME, true
+			case '3':      return KEY_DELETE, true
+			case '4', '8': return KEY_END, true
+			}
+		}
+	}
+	return 0, false
 }
 
 serial_getc :: proc "contextless" () -> u8 {

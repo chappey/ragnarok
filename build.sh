@@ -128,7 +128,15 @@ try:
             if not sent and b"RAGNAROK_READY" in buf:
                 sent = True
                 # First newline exits live animated splash into shell
-                proc.stdin.write(b"\nsys\nmem\npci | find NVMe\ndisks\nls\nread WELCOME.TXT | find AHCI\nread WELCOME.TXT | count\necho hello | hex\nmem\nhalt\n")
+                proc.stdin.write(
+                    b"\nsys\nmem\npci | find NVMe\ndisks\nls\n"
+                    b"read WELCOME.TXT | find AHCI\nread WELCOME.TXT | count\n"
+                    b"echo hello | hex\n"
+                    b"echo foo bar\x17baz\n"
+                    b"\x1b[A\n"
+                    b"history\n"
+                    b"mem\nhalt\n"
+                )
                 proc.stdin.flush()
         if proc.poll() is not None:
             break
@@ -144,6 +152,7 @@ required = [
     b"Read directly via AHCI/NVMe DMA",
     b"lines=2",
     b"68 65 6C 6C 6F",
+    b"foo baz",
     b"Arena test: PASS",
 ]
 for needle in required:

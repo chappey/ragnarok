@@ -8,6 +8,7 @@ import "base:runtime"
 SHELL_MAX_LINE   :: 256
 SHELL_MAX_STAGES :: 8
 SHELL_MAX_ARGS   :: 32
+SHELL_MAX_HIST   :: 32
 HEX_DUMP_LIMIT   :: 4096
 
 Cmd_Context :: struct {
@@ -26,12 +27,18 @@ Command :: struct {
 	run:     Cmd_Proc,
 }
 
-g_commands := [17]Command{
+g_commands := [18]Command{
 	{
 		name    = "help",
 		summary = "List commands or show usage for one command",
 		usage   = "help [cmd]",
 		run     = cmd_help,
+	},
+	{
+		name    = "history",
+		summary = "Show recent command history",
+		usage   = "history",
+		run     = cmd_history,
 	},
 	{
 		name    = "sys",
@@ -284,6 +291,17 @@ cmd_help :: proc(ctx: ^Cmd_Context) -> int {
 			ob_putc(ctx.out, ' ')
 		}
 		ob_puts(ctx.out, c.summary)
+		ob_putc(ctx.out, '\n')
+	}
+	return 0
+}
+
+cmd_history :: proc(ctx: ^Cmd_Context) -> int {
+	for i := 0; i < g_hist_count; i += 1 {
+		ob_puts(ctx.out, "  ")
+		ob_put_u64(ctx.out, u64(i + 1))
+		ob_puts(ctx.out, "  ")
+		ob_put_bytes(ctx.out, g_history[i][:g_hist_lens[i]])
 		ob_putc(ctx.out, '\n')
 	}
 	return 0
@@ -808,41 +826,318 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 	}
 }
 
+g_history:    [SHELL_MAX_HIST][SHELL_MAX_LINE]u8
+g_hist_lens:  [SHELL_MAX_HIST]int
+g_hist_count: int
+
+history_push :: proc "contextless" (line: []u8) {
+	if len(line) == 0 {
+		return
+	}
+	if g_hist_count > 0 {
+		last_len := g_hist_lens[g_hist_count - 1]
+		if last_len == len(line) {
+			same := true
+			for i := 0; i < last_len; i += 1 {
+				if g_history[g_hist_count - 1][i] != line[i] {
+					same = false
+					break
+				}
+			}
+			if same {
+				return
+			}
+		}
+	}
+	if g_hist_count == SHELL_MAX_HIST {
+		for i := 1; i < SHELL_MAX_HIST; i += 1 {
+			g_hist_lens[i - 1] = g_hist_lens[i]
+			for j := 0; j < g_hist_lens[i]; j += 1 {
+				g_history[i - 1][j] = g_history[i][j]
+			}
+		}
+		g_hist_count -= 1
+	}
+	idx := g_hist_count
+	g_hist_lens[idx] = len(line)
+	for i := 0; i < len(line); i += 1 {
+		g_history[idx][i] = line[i]
+	}
+	g_hist_count += 1
+}
+
+shell_redraw_line :: proc "contextless" (
+	line: []u8,
+	n: int,
+	cursor: int,
+	prev_n: int,
+	start_x: i32,
+	start_y: ^i32,
+	redraw_serial: bool,
+) {
+	// 1. Update 80x60 on-screen console cleanly without cursor-wrap artifacts
+	total := n if n > prev_n else prev_n
+	cur_x := start_x
+	cur_y := start_y^
+	target_x := start_x
+	target_y := start_y^
+
+	for i := 0; i <= total; i += 1 {
+		if i == cursor {
+			target_x = cur_x
+			target_y = cur_y
+		}
+		if i == total {
+			break
+		}
+		ch := line[i] if i < n else u8(' ')
+		g_con_cells[cur_y * CON_COLS + cur_x] = Console_Cell{ch, COL_WHITE, COL_BLACK}
+		cur_x += 1
+		if cur_x >= CON_COLS {
+			cur_x = 0
+			cur_y += 1
+			if cur_y >= CON_ROWS {
+				con_scroll()
+				start_y^ -= 1
+				cur_y -= 1
+				if i >= cursor {
+					target_y -= 1
+				}
+			}
+		}
+	}
+	g_con_x = target_x
+	g_con_y = target_y
+	con_flush()
+
+	// 2. Sync COM1 serial line cleanly
+	if redraw_serial && g_serial_present {
+		serial_putc('\r')
+		serial_puts("ragnarok> ")
+		for i := 0; i < n; i += 1 {
+			serial_putc(line[i])
+		}
+		for i := n; i < prev_n; i += 1 {
+			serial_putc(' ')
+		}
+		serial_putc('\r')
+		serial_puts("ragnarok> ")
+		for i := 0; i < cursor; i += 1 {
+			serial_putc(line[i])
+		}
+	}
+}
+
 shell_loop :: proc "contextless" () {
-	line: [SHELL_MAX_LINE]u8
+	line:  [SHELL_MAX_LINE]u8
+	draft: [SHELL_MAX_LINE]u8
 	for {
 		con_set_color(COL_LTGREEN, COL_BLACK)
 		out_puts("ragnarok> ")
 		con_set_color(COL_WHITE, COL_BLACK)
+		start_x := g_con_x
+		start_y := g_con_y
+
 		n := 0
+		cursor := 0
+		draft_len := 0
+		hist_pos := g_hist_count
+		cancelled := false
+
 		for {
 			c := input_getc()
-			if c == 0x0C { // Ctrl+L
-				con_clear()
-				con_set_color(COL_LTGREEN, COL_BLACK)
-				out_puts("ragnarok> ")
-				con_set_color(COL_WHITE, COL_BLACK)
-				for i := 0; i < n; i += 1 {
-					con_putc_raw(line[i])
-				}
-				con_flush()
-				continue
-			}
+			prev_n := n
+
 			if c == '\r' || c == '\n' {
+				if cursor != n {
+					shell_redraw_line(line[:], n, n, prev_n, start_x, &start_y, false)
+				}
 				out_puts("\n")
 				break
 			}
-			if (c == 0x08 || c == 0x7F) && n > 0 {
-				n -= 1
-				out_puts("\b \b")
-			} else if c >= 0x20 && c < 0x7F && n < len(line) {
-				line[n] = c
-				n += 1
-				out_putc(c)
-				con_flush()
+
+			if c == 0x03 { // Ctrl+C
+				out_puts("^C\n")
+				cancelled = true
+				break
+			}
+
+			if c == 0x0C { // Ctrl+L (clear screen, keep current line + cursor)
+				con_clear()
+				con_set_color(COL_LTGREEN, COL_BLACK)
+				prompt := "ragnarok> "
+				for i := 0; i < len(prompt); i += 1 {
+					con_putc_raw(prompt[i])
+				}
+				con_set_color(COL_WHITE, COL_BLACK)
+				start_x = g_con_x
+				start_y = g_con_y
+				shell_redraw_line(line[:], n, cursor, 0, start_x, &start_y, true)
+				continue
+			}
+
+			if c == KEY_LEFT || c == 0x02 { // Left / Ctrl+B
+				if cursor > 0 {
+					cursor -= 1
+					shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, true)
+				}
+				continue
+			}
+			if c == KEY_RIGHT || c == 0x06 { // Right / Ctrl+F
+				if cursor < n {
+					cursor += 1
+					shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, true)
+				}
+				continue
+			}
+			if c == KEY_HOME || c == 0x01 { // Home / Ctrl+A
+				if cursor != 0 {
+					cursor = 0
+					shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, true)
+				}
+				continue
+			}
+			if c == KEY_END || c == 0x05 { // End / Ctrl+E
+				if cursor != n {
+					cursor = n
+					shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, true)
+				}
+				continue
+			}
+
+			if c == KEY_UP || c == 0x10 { // Up / Ctrl+P
+				if hist_pos > 0 {
+					if hist_pos == g_hist_count {
+						draft_len = n
+						for i := 0; i < n; i += 1 {
+							draft[i] = line[i]
+						}
+					}
+					hist_pos -= 1
+					n = g_hist_lens[hist_pos]
+					for i := 0; i < n; i += 1 {
+						line[i] = g_history[hist_pos][i]
+					}
+					cursor = n
+					shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, true)
+				}
+				continue
+			}
+			if c == KEY_DOWN || c == 0x0E { // Down / Ctrl+N
+				if hist_pos < g_hist_count {
+					hist_pos += 1
+					if hist_pos == g_hist_count {
+						n = draft_len
+						for i := 0; i < n; i += 1 {
+							line[i] = draft[i]
+						}
+					} else {
+						n = g_hist_lens[hist_pos]
+						for i := 0; i < n; i += 1 {
+							line[i] = g_history[hist_pos][i]
+						}
+					}
+					cursor = n
+					shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, true)
+				}
+				continue
+			}
+
+			if c == 0x08 || c == 0x7F { // Backspace
+				if cursor > 0 {
+					if cursor == n {
+						n -= 1
+						cursor -= 1
+						shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, false)
+						serial_puts("\b \b")
+					} else {
+						for i := cursor; i < n; i += 1 {
+							line[i - 1] = line[i]
+						}
+						n -= 1
+						cursor -= 1
+						shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, true)
+					}
+				}
+				continue
+			}
+
+			if c == KEY_DELETE || c == 0x04 { // Delete / Ctrl+D
+				if cursor < n {
+					for i := cursor + 1; i < n; i += 1 {
+						line[i - 1] = line[i]
+					}
+					n -= 1
+					shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, true)
+				}
+				continue
+			}
+
+			if c == 0x0B { // Ctrl+K (kill to end)
+				if cursor < n {
+					n = cursor
+					shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, true)
+				}
+				continue
+			}
+
+			if c == 0x15 { // Ctrl+U (kill to start)
+				if cursor > 0 {
+					rem := n - cursor
+					for i := 0; i < rem; i += 1 {
+						line[i] = line[cursor + i]
+					}
+					n = rem
+					cursor = 0
+					shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, true)
+				}
+				continue
+			}
+
+			if c == 0x17 { // Ctrl+W (kill previous word)
+				if cursor > 0 {
+					new_cur := cursor
+					for new_cur > 0 && line[new_cur - 1] == ' ' {
+						new_cur -= 1
+					}
+					for new_cur > 0 && line[new_cur - 1] != ' ' {
+						new_cur -= 1
+					}
+					del := cursor - new_cur
+					for i := cursor; i < n; i += 1 {
+						line[i - del] = line[i]
+					}
+					n -= del
+					cursor = new_cur
+					shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, true)
+				}
+				continue
+			}
+
+			if c >= 0x20 && c < 0x7F && n < len(line) {
+				if cursor == n {
+					line[n] = c
+					n += 1
+					cursor += 1
+					serial_putc(c)
+					shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, false)
+				} else {
+					for i := n; i > cursor; i -= 1 {
+						line[i] = line[i - 1]
+					}
+					line[cursor] = c
+					n += 1
+					cursor += 1
+					shell_redraw_line(line[:], n, cursor, prev_n, start_x, &start_y, true)
+				}
 			}
 		}
 
+		if cancelled {
+			continue
+		}
+
+		history_push(line[:n])
 		con_set_color(COL_LTGRAY, COL_BLACK)
 		shell_exec_line(line[:n])
 	}
