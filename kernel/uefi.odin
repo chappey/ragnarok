@@ -52,9 +52,21 @@ EFI_GOP_Mode :: struct {
 	frame_buffer_size: uintptr,
 }
 
+EFI_GOP_Query_Mode :: #type proc "c" (
+	this:          ^EFI_GOP,
+	mode_number:   u32,
+	size_of_info:  ^uintptr,
+	info:          ^^EFI_GOP_Mode_Info,
+) -> EFI_Status
+
+EFI_GOP_Set_Mode :: #type proc "c" (
+	this:        ^EFI_GOP,
+	mode_number: u32,
+) -> EFI_Status
+
 EFI_GOP :: struct {
-	query_mode: rawptr,
-	set_mode:   rawptr,
+	query_mode: EFI_GOP_Query_Mode,
+	set_mode:   EFI_GOP_Set_Mode,
 	blt:        rawptr,
 	mode:       ^EFI_GOP_Mode,
 }
