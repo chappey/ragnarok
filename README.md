@@ -7,7 +7,9 @@ A Ring-0 x86_64 operating system written in freestanding Odin, booting directly 
 ## Quick Start
 
 ```sh
-./build.sh           # Compile kernel/ + userspace/apps/ (.PRG)
+./build.sh           # Compile kernel/ + incremental parallel userspace/apps/ (.PRG)
+./build.sh kernel    # Compile only kernel/ -> BOOTX64.EFI
+./build.sh apps      # Compile stale userspace/apps/*/ -> build/bin/*.PRG in parallel
 ./build.sh run       # Boot Ragnarök in QEMU/KVM
 ./build.sh usb       # Build UEFI-bootable GPT/FAT32 USB image (build/ragnarok.img)
 ./build.sh test      # Headless smoke test via COM1 serial

@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+shopt -s nullglob globstar
 
 SCRIPT_DIR="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
 BUILD_DIR="$SCRIPT_DIR/build"
@@ -17,7 +18,28 @@ require_cmd() {
     done
 }
 
-build() {
+is_stale() {
+    local target="$1"
+    shift
+    if [[ ! -f "$target" ]]; then
+        return 0
+    fi
+    local dep f
+    for dep in "$@"; do
+        if [[ -d "$dep" ]]; then
+            for f in "$dep"/**/*.odin; do
+                if [[ "$f" -nt "$target" ]]; then
+                    return 0
+                fi
+            done
+        elif [[ -f "$dep" && "$dep" -nt "$target" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+build_kernel() {
     local mode="${1:-}"
     local debug_flags=()
     if [[ "$mode" == "debug" ]]; then
@@ -56,45 +78,99 @@ build() {
         "$BUILD_DIR/arch.obj"
 
     echo "Built $EFI_OUT ($(stat -c%s "$EFI_OUT") bytes)"
-    build_userspace
+}
+
+build_one_app() {
+    local app_dir="$1"
+    local app_name obj prg
+    app_name="$(basename "$app_dir" | tr '[:lower:]' '[:upper:]')"
+    obj="$BUILD_DIR/bin/${app_name}.obj"
+    prg="$BUILD_DIR/bin/${app_name}.PRG"
+    odin build "$app_dir" \
+        -target:freestanding_amd64_win64 \
+        -build-mode:obj \
+        -o:size \
+        -no-crt \
+        -no-entry-point \
+        -default-to-nil-allocator \
+        -no-thread-local \
+        -disable-red-zone \
+        -out:"$obj"
+    lld-link \
+        /subsystem:efi_application \
+        /entry:prg_main \
+        /nodefaultlib \
+        /fixed:no \
+        /dynamicbase \
+        /opt:ref \
+        /opt:icf \
+        /noimplib \
+        /out:"$prg" \
+        "$obj" \
+        "$BUILD_DIR/prg_crt0.obj"
+    echo "  Built $prg ($(stat -c%s "$prg") bytes)"
 }
 
 build_userspace() {
+    require_cmd odin nasm lld-link
     mkdir -p "$BUILD_DIR/bin"
-    rm -f "$BUILD_DIR/bin"/*.PRG "$BUILD_DIR/bin"/*.obj
+    rm -f "$BUILD_DIR/bin"/*.lib
 
-    echo "[4/4] Building standalone userspace .prg executables..."
-    nasm -f win64 "$SCRIPT_DIR/userspace/crt0.asm" -o "$BUILD_DIR/prg_crt0.obj"
+    local f base lower_dir
+    for f in "$BUILD_DIR/bin"/*.PRG "$BUILD_DIR/bin"/*.obj; do
+        [[ -f "$f" ]] || continue
+        base="$(basename "$f")"
+        base="${base%.*}"
+        lower_dir="$SCRIPT_DIR/userspace/apps/$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')"
+        if [[ ! -d "$lower_dir" ]]; then
+            rm -f "$f"
+        fi
+    done
 
-    local app_dir app_name obj prg
+    if is_stale "$BUILD_DIR/prg_crt0.obj" "$SCRIPT_DIR/userspace/crt0.asm" "$SCRIPT_DIR/build.sh"; then
+        nasm -f win64 "$SCRIPT_DIR/userspace/crt0.asm" -o "$BUILD_DIR/prg_crt0.obj"
+    fi
+
+    local dirty_apps=()
+    local app_dir app_name prg
     for app_dir in "$SCRIPT_DIR/userspace/apps"/*/; do
         [[ -d "$app_dir" ]] || continue
         app_name="$(basename "$app_dir" | tr '[:lower:]' '[:upper:]')"
-        obj="$BUILD_DIR/bin/${app_name}.obj"
         prg="$BUILD_DIR/bin/${app_name}.PRG"
-        odin build "$app_dir" \
-            -target:freestanding_amd64_win64 \
-            -build-mode:obj \
-            -o:size \
-            -no-crt \
-            -no-entry-point \
-            -default-to-nil-allocator \
-            -no-thread-local \
-            -disable-red-zone \
-            -out:"$obj"
-        lld-link \
-            /subsystem:efi_application \
-            /entry:prg_main \
-            /nodefaultlib \
-            /fixed:no \
-            /dynamicbase \
-            /opt:ref \
-            /opt:icf \
-            /out:"$prg" \
-            "$obj" \
-            "$BUILD_DIR/prg_crt0.obj"
-        echo "  Built $prg ($(stat -c%s "$prg") bytes)"
+        if is_stale "$prg" \
+            "$app_dir" \
+            "$SCRIPT_DIR/userspace/prg" \
+            "$SCRIPT_DIR/kernel/syscalls" \
+            "$SCRIPT_DIR/userspace/crt0.asm" \
+            "$SCRIPT_DIR/build.sh"; then
+            dirty_apps+=("$app_dir")
+        fi
     done
+
+    if [[ ${#dirty_apps[@]} -eq 0 ]]; then
+        echo "[4/4] Userspace .prg executables up to date"
+        return 0
+    fi
+
+    echo "[4/4] Building ${#dirty_apps[@]} userspace .prg executable(s) in parallel..."
+    local pids=() pid fail=0
+    for app_dir in "${dirty_apps[@]}"; do
+        build_one_app "$app_dir" &
+        pids+=("$!")
+    done
+    for pid in "${pids[@]}"; do
+        if ! wait "$pid"; then
+            fail=1
+        fi
+    done
+    if [[ "$fail" -ne 0 ]]; then
+        return 1
+    fi
+}
+
+build() {
+    build_kernel "${1:-}"
+    build_userspace
 }
 
 ensure_disk_imgs() {
@@ -281,7 +357,7 @@ debug_vm() {
 asm_dump() {
     require_cmd llvm-objdump rg
     if [[ ! -f "$EFI_OUT" ]]; then
-        build
+        build_kernel
     fi
     local sym="${1:-}"
     if [[ -n "$sym" ]]; then
@@ -295,7 +371,7 @@ asm_dump() {
 
 sym_dump() {
     if [[ ! -f "$BUILD_DIR/kernel.map" ]]; then
-        build
+        build_kernel
     fi
     if command -v llvm-nm >/dev/null 2>&1 && [[ -f "$BUILD_DIR/kernel.obj" ]]; then
         llvm-nm --size-sort --reverse-sort "$BUILD_DIR/kernel.obj" | head -n 40
@@ -318,17 +394,19 @@ log_vm() {
 }
 
 case "${1:-build}" in
-    build) build ;;
-    usb)   build_usb ;;
-    run)   run_vm ;;
-    test)  test_vm ;;
-    debug) debug_vm ;;
-    asm)   asm_dump "${2:-}" ;;
-    sym)   sym_dump ;;
-    log)   log_vm ;;
-    clean) rm -rf "$BUILD_DIR" ;;
+    build)  build ;;
+    kernel) build_kernel ;;
+    apps)   build_userspace ;;
+    usb)    build_usb ;;
+    run)    run_vm ;;
+    test)   test_vm ;;
+    debug)  debug_vm ;;
+    asm)    asm_dump "${2:-}" ;;
+    sym)    sym_dump ;;
+    log)    log_vm ;;
+    clean)  rm -rf "$BUILD_DIR" ;;
     *)
-        echo "Usage: $0 [build|usb|run|test|debug|asm [sym]|sym|log|clean]" >&2
+        echo "Usage: $0 [build|kernel|apps|usb|run|test|debug|asm [sym]|sym|log|clean]" >&2
         exit 1
         ;;
 esac
