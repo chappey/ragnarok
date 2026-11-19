@@ -3,8 +3,9 @@ package kernel
 // 80x60 on-screen text console rendered onto the 640x480x16 logical canvas.
 // Row 0 is the fixed status bar; rows 1..59 are the scrolling terminal area.
 
-CON_COLS :: GFX_COLS        // 80
-CON_ROWS :: GFX_ROWS - 1    // 59 scrolling text rows
+CON_TOP_PX :: 24                                // 16px padded bar + 8px bottom margin
+CON_COLS   :: GFX_COLS                          // 80
+CON_ROWS   :: (GFX_HEIGHT - CON_TOP_PX) / 8     // 57 scrolling text rows
 
 Console_Cell :: struct {
 	ch: u8,
@@ -146,28 +147,31 @@ rtc_format_utc :: proc "contextless" (buf: []u8) -> int {
 }
 
 con_draw_status_bar :: proc "contextless" () {
-	gfx_rect(0, 0, GFX_WIDTH, 8, COL_BLUE)
-	gfx_text(8, 0, "RAGNAROK v0.1", COL_YELLOW, COL_BLUE)
+	gfx_rect(0, 0, GFX_WIDTH, 16, COL_BLUE)
+	gfx_hline(0, GFX_WIDTH - 1, 16, COL_DKGRAY)
+	gfx_rect(0, 17, GFX_WIDTH, CON_TOP_PX - 17, COL_BLACK)
+
+	gfx_text(12, 4, "RAGNAROK v0.1", COL_YELLOW, COL_BLUE)
 
 	clk_buf: [19]u8
 	_ = rtc_format_utc(clk_buf[:])
-	gfx_text((GFX_WIDTH - 19 * 8) / 2, 0, string(clk_buf[:]), COL_WHITE, COL_BLUE)
+	gfx_text((GFX_WIDTH - 19 * 8) / 2, 4, string(clk_buf[:]), COL_WHITE, COL_BLUE)
 
 	if g_xhci.kbd_ready && g_ps2_present {
-		gfx_text(GFX_WIDTH - 88, 0, "[USB+PS/2]", COL_LTGREEN, COL_BLUE)
+		gfx_text(GFX_WIDTH - 92, 4, "[USB+PS/2]", COL_LTGREEN, COL_BLUE)
 	} else if g_xhci.kbd_ready {
-		gfx_text(GFX_WIDTH - 48, 0, "[USB]", COL_LTGREEN, COL_BLUE)
+		gfx_text(GFX_WIDTH - 52, 4, "[USB]", COL_LTGREEN, COL_BLUE)
 	} else if g_ps2_present {
-		gfx_text(GFX_WIDTH - 56, 0, "[PS/2]", COL_LTGREEN, COL_BLUE)
+		gfx_text(GFX_WIDTH - 60, 4, "[PS/2]", COL_LTGREEN, COL_BLUE)
 	} else {
-		gfx_text(GFX_WIDTH - 48, 0, "[SER]", COL_LTRED, COL_BLUE)
+		gfx_text(GFX_WIDTH - 52, 4, "[SER]", COL_LTRED, COL_BLUE)
 	}
 }
 
 con_flush :: proc "contextless" () {
 	con_draw_status_bar()
 	for y := i32(0); y < CON_ROWS; y += 1 {
-		py := (y + 1) * 8
+		py := CON_TOP_PX + y * 8
 		row := y * CON_COLS
 		for x := i32(0); x < CON_COLS; x += 1 {
 			cell := g_con_cells[row + x]
@@ -176,7 +180,7 @@ con_flush :: proc "contextless" () {
 	}
 	// Draw crisp yellow block cursor
 	cx := g_con_x * 8
-	cy := (g_con_y + 1) * 8
+	cy := CON_TOP_PX + g_con_y * 8
 	gfx_rect(cx, cy + 6, 8, 2, COL_YELLOW)
 	gfx_present()
 }
