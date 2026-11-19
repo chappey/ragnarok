@@ -29,7 +29,7 @@ Command :: struct {
 	run:     Cmd_Proc,
 }
 
-g_commands := [35]Command{
+g_commands := [36]Command{
 	{
 		name    = "help",
 		summary = "List commands or show usage for one command",
@@ -155,6 +155,12 @@ g_commands := [35]Command{
 		summary = "Show mounted FAT32 capacity and free space",
 		usage   = "df",
 		run     = cmd_df,
+	},
+	{
+		name    = "mount",
+		summary = "Show current disk or mount FAT32 on block device index",
+		usage   = "mount [blk_idx]",
+		run     = cmd_mount,
 	},
 	{
 		name    = "find",
@@ -662,6 +668,38 @@ cmd_df :: proc(ctx: ^Cmd_Context) -> int {
 	return 0
 }
 
+cmd_mount :: proc(ctx: ^Cmd_Context) -> int {
+	if len(ctx.args) < 2 {
+		if !g_fat32.mounted {
+			ob_puts(ctx.out, "No FAT32 volume mounted.\n")
+			return 0
+		}
+		ob_puts(ctx.out, "Mounted: [")
+		ob_put_u64(ctx.out, u64(g_fat32_dev_idx))
+		ob_puts(ctx.out, "] ")
+		ob_puts(ctx.out, g_fat32.dev.name)
+		ob_puts(ctx.out, " (part_lba=")
+		ob_put_u64(ctx.out, g_fat32.part_lba)
+		ob_puts(ctx.out, ")\n")
+		return 0
+	}
+	idx, ok := parse_dec_u64(ctx.args[1])
+	if !ok || int(idx) >= g_block_count {
+		ob_puts(ctx.out, "mount: invalid block device index\n")
+		return 1
+	}
+	if !fat32_mount_dev(int(idx)) {
+		ob_puts(ctx.out, "mount: no valid FAT32 volume on device\n")
+		return 1
+	}
+	ob_puts(ctx.out, "Mounted [")
+	ob_put_u64(ctx.out, idx)
+	ob_puts(ctx.out, "] ")
+	ob_puts(ctx.out, g_fat32.dev.name)
+	ob_putc(ctx.out, '\n')
+	return 0
+}
+
 cmd_read :: proc(ctx: ^Cmd_Context) -> int {
 	if len(ctx.args) < 2 {
 		ob_puts(ctx.out, "Usage: read <file>\n")
@@ -1063,7 +1101,7 @@ cmd_reboot :: proc(ctx: ^Cmd_Context) -> int {
 
 cmd_halt :: proc(ctx: ^Cmd_Context) -> int {
 	out_puts("Powering off...\n")
-	arch_poweroff()
+	acpi_poweroff()
 	return 0
 }
 

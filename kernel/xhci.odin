@@ -16,6 +16,7 @@ TRB_LINK            :: u32(6)
 TRB_ENABLE_SLOT     :: u32(9)
 TRB_ADDRESS_DEVICE  :: u32(11)
 TRB_CONFIGURE_EP    :: u32(12)
+TRB_EVALUATE_CTX    :: u32(13)
 TRB_TRANSFER_EVENT  :: u32(32)
 TRB_CMD_COMPLETION  :: u32(33)
 
@@ -241,32 +242,27 @@ xhci_queue_kbd_transfer :: proc "contextless" () {
 	xhci_ring_doorbell(g_xhci.kbd_slot, g_xhci.kbd_dci)
 }
 
-xhci_try_port :: proc "contextless" (port: u32) -> bool {
-	portsc_addr := g_xhci.op_base + 0x400 + u64(port - 1) * 0x10
-	sc := mmio_read32(portsc_addr)
-	if (sc & 1) == 0 { // CCS == 0 (no device)
-		return false
+xhci_sleep_ms :: proc "contextless" (ms: u32) {
+	end := tsc_us() + u64(ms) * 1000
+	for tsc_us() < end {
+		arch_pause()
 	}
+}
 
-	// Reset port if not enabled yet (preserve PP bit 9, avoid clearing RW1C bits accidentally)
-	if (sc & 2) == 0 {
-		mmio_write32(portsc_addr, (sc & 0x0E00_C3E0) | (1 << 4)) // PR = 1
-		for i := 0; i < 2_000_000; i += 1 {
-			sc = mmio_read32(portsc_addr)
-			if (sc & (1 << 4)) == 0 && (sc & 2) != 0 {
-				break
-			}
-			arch_pause()
-		}
+xhci_zero_page :: proc "contextless" (phys: u64) {
+	q := ([^]u64)(uintptr(phys))
+	for i := 0; i < 512; i += 1 {
+		q[i] = 0
 	}
-	sc = mmio_read32(portsc_addr)
-	if (sc & 2) == 0 { // Still not enabled
-		return false
-	}
-	// Clear change bits (CSC/PEC/PRC)
-	mmio_write32(portsc_addr, (sc & 0x0E00_C3E0) | 0x00FE_0000)
+}
 
-	speed := (sc >> 10) & 0x0F
+xhci_attach_device :: proc "contextless" (
+	root_port: u32,
+	route_string: u32,
+	speed: u32,
+	tt_slot: u32,
+	tt_port: u32,
+) -> bool {
 	mps0 := u32(8)
 	if speed == 3 {
 		mps0 = 64
@@ -299,22 +295,45 @@ xhci_try_port :: proc "contextless" (port: u32) -> bool {
 	xhci_ring_init(&ep0, ep0_pg)
 
 	// 2. Build Input Context for Address Device (Add Slot + EP0)
-	xhci_ctx_dw(in_ctx, 0, 1)^ = (1 << 0) | (1 << 1) // Add Context Flags
-	// Slot Context (index 1)
-	xhci_ctx_dw(in_ctx, 1, 0)^ = (u32(1) << 27) | (speed << 20) // Context Entries=1, Speed
-	xhci_ctx_dw(in_ctx, 1, 1)^ = port << 16                     // Root Hub Port Number
-	// EP0 Context (index 2)
-	xhci_ctx_dw(in_ctx, 2, 1)^ = (u32(3) << 1) | (u32(4) << 3) | (mps0 << 16) // CErr=3, Control, MPS
-	xhci_ctx_dw(in_ctx, 2, 2)^ = u32((ep0_pg & 0xFFFF_FFFF) | 1)              // TR Deq lo | DCS=1
-	xhci_ctx_dw(in_ctx, 2, 3)^ = u32(ep0_pg >> 32)                            // TR Deq hi
-	xhci_ctx_dw(in_ctx, 2, 4)^ = 8                                            // Avg TRB Len
+	route := route_string & 0x000F_FFFF
+	tt_dw2 := u32(0)
+	if tt_slot != 0 && (speed == 1 || speed == 2) {
+		tt_dw2 = (tt_slot & 0xFF) | ((tt_port & 0xFF) << 8)
+	}
+
+	xhci_ctx_dw(in_ctx, 0, 1)^ = (1 << 0) | (1 << 1)
+	xhci_ctx_dw(in_ctx, 1, 0)^ = (u32(1) << 27) | (speed << 20) | route
+	xhci_ctx_dw(in_ctx, 1, 1)^ = root_port << 16
+	xhci_ctx_dw(in_ctx, 1, 2)^ = tt_dw2
+	xhci_ctx_dw(in_ctx, 2, 1)^ = (u32(3) << 1) | (u32(4) << 3) | (mps0 << 16)
+	xhci_ctx_dw(in_ctx, 2, 2)^ = u32((ep0_pg & 0xFFFF_FFFF) | 1)
+	xhci_ctx_dw(in_ctx, 2, 3)^ = u32(ep0_pg >> 32)
+	xhci_ctx_dw(in_ctx, 2, 4)^ = 8
 
 	_, ok = xhci_cmd(in_ctx, (TRB_ADDRESS_DEVICE << 10) | (slot_id << 24))
 	if !ok {
 		return false
 	}
 
-	// 3. GET_DESCRIPTOR (Configuration, first 9 bytes, then full length)
+	// 3. GET_DESCRIPTOR (Device, first 8 bytes to inspect bDeviceClass + bMaxPacketSize0)
+	if !xhci_ctrl_transfer(slot_id, &ep0, 0x80, 6, 0x0100, 0, 8, dma_pg) {
+		return false
+	}
+	dev_desc := ([^]u8)(uintptr(dma_pg))
+	dev_class := dev_desc[4]
+	real_mps0 := u32(dev_desc[7])
+	if speed == 4 && real_mps0 == 9 {
+		real_mps0 = 512
+	}
+	if real_mps0 > mps0 && real_mps0 <= 512 {
+		mps0 = real_mps0
+		xhci_zero_page(in_ctx)
+		xhci_ctx_dw(in_ctx, 0, 1)^ = (1 << 1) // Evaluate EP0 only
+		xhci_ctx_dw(in_ctx, 2, 1)^ = (u32(3) << 1) | (u32(4) << 3) | (mps0 << 16)
+		_, _ = xhci_cmd(in_ctx, (TRB_EVALUATE_CTX << 10) | (slot_id << 24))
+	}
+
+	// 4. GET_DESCRIPTOR (Configuration, first 9 bytes, then full length)
 	if !xhci_ctrl_transfer(slot_id, &ep0, 0x80, 6, 0x0200, 0, 9, dma_pg) {
 		return false
 	}
@@ -326,9 +345,81 @@ xhci_try_port :: proc "contextless" (port: u32) -> bool {
 	if !xhci_ctrl_transfer(slot_id, &ep0, 0x80, 6, 0x0200, 0, total_len, dma_pg) {
 		return false
 	}
-
-	// 4. Parse Configuration Descriptor for HID Boot Keyboard (class=3, sub=1, proto=1)
 	cfg_val := cfg[5]
+
+	// 5. If this is a 1st-level USB Hub (bDeviceClass == 9), enumerate downstream ports
+	if dev_class == 0x09 && route_string == 0 {
+		if !xhci_ctrl_transfer(slot_id, &ep0, 0x00, 9, u16(cfg_val), 0, 0, 0) {
+			return false
+		}
+		hub_wval := u16(0x2A00) if speed >= 4 else u16(0x2900)
+		if !xhci_ctrl_transfer(slot_id, &ep0, 0xA0, 6, hub_wval, 0, 9, dma_pg) {
+			if !xhci_ctrl_transfer(slot_id, &ep0, 0xA0, 6, 0x2900, 0, 9, dma_pg) {
+				return false
+			}
+		}
+		nbr_ports := u32(cfg[2])
+		if nbr_ports == 0 {
+			return false
+		}
+		if nbr_ports > 8 {
+			nbr_ports = 8
+		}
+
+		// Notify xHCI that this slot is a Hub with `nbr_ports` downstream ports
+		xhci_zero_page(in_ctx)
+		xhci_ctx_dw(in_ctx, 0, 1)^ = (1 << 0) // Slot Context only
+		xhci_ctx_dw(in_ctx, 1, 0)^ = (u32(1) << 27) | (1 << 26) | (speed << 20)
+		xhci_ctx_dw(in_ctx, 1, 1)^ = (root_port << 16) | (nbr_ports << 24)
+		_, _ = xhci_cmd(in_ctx, (TRB_CONFIGURE_EP << 10) | (slot_id << 24))
+
+		for hp := u32(1); hp <= nbr_ports; hp += 1 {
+			_ = xhci_ctrl_transfer(slot_id, &ep0, 0x23, 3, 8, u16(hp), 0, 0) // SET_FEATURE PORT_POWER
+		}
+		xhci_sleep_ms(20)
+
+		for hp := u32(1); hp <= nbr_ports; hp += 1 {
+			if !xhci_ctrl_transfer(slot_id, &ep0, 0xA3, 0, 0, u16(hp), 4, dma_pg) {
+				continue
+			}
+			pstat := u32(cfg[0]) | (u32(cfg[1]) << 8)
+			if (pstat & 1) == 0 { // PORT_CONNECTION == 0
+				continue
+			}
+			// Reset hub downstream port & clear change bits
+			_ = xhci_ctrl_transfer(slot_id, &ep0, 0x23, 3, 4, u16(hp), 0, 0) // PORT_RESET
+			xhci_sleep_ms(25)
+			_ = xhci_ctrl_transfer(slot_id, &ep0, 0x23, 1, 20, u16(hp), 0, 0) // C_PORT_RESET
+			_ = xhci_ctrl_transfer(slot_id, &ep0, 0x23, 1, 16, u16(hp), 0, 0) // C_PORT_CONNECTION
+
+			if !xhci_ctrl_transfer(slot_id, &ep0, 0xA3, 0, 0, u16(hp), 4, dma_pg) {
+				continue
+			}
+			pstat = u32(cfg[0]) | (u32(cfg[1]) << 8)
+			if (pstat & 2) == 0 { // PORT_ENABLE == 0
+				continue
+			}
+
+			child_speed := u32(1) // Full-speed default
+			if speed >= 4 {
+				child_speed = 4
+			} else if (pstat & (1 << 9)) != 0 {
+				child_speed = 2 // Low-speed
+			} else if (pstat & (1 << 10)) != 0 {
+				child_speed = 3 // High-speed
+			}
+
+			child_tt_slot := slot_id if (speed == 3 && (child_speed == 1 || child_speed == 2)) else u32(0)
+			child_tt_port := hp      if child_tt_slot != 0 else u32(0)
+
+			if xhci_attach_device(root_port, hp & 0xF, child_speed, child_tt_slot, child_tt_port) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// 6. Parse Configuration Descriptor for HID Boot Keyboard (class=3, sub=1, proto=1)
 	in_kbd_iface := false
 	kbd_iface := u8(0)
 	kbd_ep_addr := u8(0)
@@ -366,31 +457,25 @@ xhci_try_port :: proc "contextless" (port: u32) -> bool {
 		return false
 	}
 
-	// 5. SET_CONFIGURATION, SET_PROTOCOL(0=Boot), SET_IDLE(0)
+	// 7. SET_CONFIGURATION, SET_PROTOCOL(0=Boot), SET_IDLE(0)
 	_ = xhci_ctrl_transfer(slot_id, &ep0, 0x00, 9, u16(cfg_val), 0, 0, 0)
 	_ = xhci_ctrl_transfer(slot_id, &ep0, 0x21, 11, 0, u16(kbd_iface), 0, 0)
 	_ = xhci_ctrl_transfer(slot_id, &ep0, 0x21, 10, 0, u16(kbd_iface), 0, 0)
 
-	// 6. Configure Interrupt IN Endpoint
+	// 8. Configure Interrupt IN Endpoint
 	ep_num := u32(kbd_ep_addr & 0x0F)
-	dci    := ep_num * 2 + 1 // IN endpoint DCI
+	dci    := ep_num * 2 + 1
 	int_pg := pmm_alloc_page()
 	if int_pg == 0 {
 		return false
 	}
 
-	// Zero input context
-	in_q := ([^]u64)(uintptr(in_ctx))
-	for i := 0; i < 512; i += 1 {
-		in_q[i] = 0
-	}
+	xhci_zero_page(in_ctx)
 
-	// Convert USB bInterval to xHCI Interval (2^n * 125us)
-	xhci_iv := u32(6) // ~8ms default
-	if speed <= 2 { // Low/Full speed: bInterval is in ms (1..255)
+	xhci_iv := u32(6)
+	if speed <= 2 {
 		ms := u32(kbd_interval)
 		if ms < 1 { ms = 1 }
-		// 2^(iv-3) ms -> find highest bit
 		iv := u32(3)
 		for (u32(1) << (iv - 3)) < ms && iv < 10 {
 			iv += 1
@@ -403,16 +488,17 @@ xhci_try_port :: proc "contextless" (port: u32) -> bool {
 		}
 	}
 
-	xhci_ctx_dw(in_ctx, 0, 1)^ = (1 << 0) | (u32(1) << dci) // Add Slot + Interrupt IN EP
-	xhci_ctx_dw(in_ctx, 1, 0)^ = (dci << 27) | (speed << 20)
-	xhci_ctx_dw(in_ctx, 1, 1)^ = port << 16
+	xhci_ctx_dw(in_ctx, 0, 1)^ = (1 << 0) | (u32(1) << dci)
+	xhci_ctx_dw(in_ctx, 1, 0)^ = (dci << 27) | (speed << 20) | route
+	xhci_ctx_dw(in_ctx, 1, 1)^ = root_port << 16
+	xhci_ctx_dw(in_ctx, 1, 2)^ = tt_dw2
 
 	ep_ctx_idx := u64(1 + dci)
 	xhci_ctx_dw(in_ctx, ep_ctx_idx, 0)^ = xhci_iv << 16
-	xhci_ctx_dw(in_ctx, ep_ctx_idx, 1)^ = (u32(3) << 1) | (u32(7) << 3) | (u32(kbd_mps) << 16) // Interrupt IN
+	xhci_ctx_dw(in_ctx, ep_ctx_idx, 1)^ = (u32(3) << 1) | (u32(7) << 3) | (u32(kbd_mps) << 16)
 	xhci_ctx_dw(in_ctx, ep_ctx_idx, 2)^ = u32((int_pg & 0xFFFF_FFFF) | 1)
 	xhci_ctx_dw(in_ctx, ep_ctx_idx, 3)^ = u32(int_pg >> 32)
-	xhci_ctx_dw(in_ctx, ep_ctx_idx, 4)^ = (u32(kbd_mps) << 16) | 8 // Max ESIT Payload | Avg TRB Len
+	xhci_ctx_dw(in_ctx, ep_ctx_idx, 4)^ = (u32(kbd_mps) << 16) | 8
 
 	_, ok = xhci_cmd(in_ctx, (TRB_CONFIGURE_EP << 10) | (slot_id << 24))
 	if !ok {
@@ -429,6 +515,33 @@ xhci_try_port :: proc "contextless" (port: u32) -> bool {
 
 	xhci_queue_kbd_transfer()
 	return true
+}
+
+xhci_try_port :: proc "contextless" (port: u32) -> bool {
+	portsc_addr := g_xhci.op_base + 0x400 + u64(port - 1) * 0x10
+	sc := mmio_read32(portsc_addr)
+	if (sc & 1) == 0 {
+		return false
+	}
+
+	if (sc & 2) == 0 {
+		mmio_write32(portsc_addr, (sc & 0x0E00_C3E0) | (1 << 4))
+		for i := 0; i < 2_000_000; i += 1 {
+			sc = mmio_read32(portsc_addr)
+			if (sc & (1 << 4)) == 0 && (sc & 2) != 0 {
+				break
+			}
+			arch_pause()
+		}
+	}
+	sc = mmio_read32(portsc_addr)
+	if (sc & 2) == 0 {
+		return false
+	}
+	mmio_write32(portsc_addr, (sc & 0x0E00_C3E0) | 0x00FE_0000)
+
+	speed := (sc >> 10) & 0x0F
+	return xhci_attach_device(port, 0, speed, 0, 0)
 }
 
 xhci_init :: proc "contextless" () {

@@ -78,6 +78,9 @@ efi_main :: proc "c" (image_handle: EFI_Handle, st: ^EFI_System_Table) -> EFI_St
 		fb_pitch = gop.mode.info.pixels_per_scan_line
 	}
 
+	// Parse ACPI RSDP/FADT/DSDT before ExitBootServices for bare-metal S5 poweroff
+	acpi_init(st)
+
 	// ExitBootServices -> full bare-metal Ring-0 ownership
 	map_size: uintptr = len(g_mem_map_buf)
 	map_key: uintptr
@@ -102,6 +105,17 @@ efi_main :: proc "c" (image_handle: EFI_Handle, st: ^EFI_System_Table) -> EFI_St
 	arch_cli()
 	tsc_init()
 	idt_init()
+
+	if g_acpi_ready {
+		klog_prefix("INFO")
+		klog_puts("ACPI PM1a_CNT=")
+		klog_put_hex(u64(g_acpi_pm1a_cnt))
+		klog_puts(" SLP_TYPa=")
+		klog_put_u64(u64(g_acpi_slp_typa))
+		klog_putc('\n')
+	} else {
+		klog_line("WARN", "ACPI FADT/S5 unavailable (using fallback poweroff ports)")
+	}
 
 	klog_prefix("INFO")
 	klog_puts("ImageBase=")

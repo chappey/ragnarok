@@ -68,10 +68,14 @@ ensure_disk_imgs() {
     printf 'Welcome to Ragnarok OS (x86_64 Ring-0, Odin + Direct UEFI)!\nRead directly via AHCI/NVMe DMA + GPT + FAT32.\n' \
         | mcopy -i "$img@@1M" - ::/WELCOME.TXT
 
-    # Small 16 MiB raw NVMe test disk (verified via NVMe Identify + Block_Device)
-    if [[ ! -f "$nvme_img" ]]; then
-        truncate -s 16M "$nvme_img"
-    fi
+    # Rebuild 40 MiB GPT/FAT32 NVMe test disk (minimum ~33 MiB for mformat -F)
+    rm -f "$nvme_img"
+    truncate -s 40M "$nvme_img"
+    printf 'label: gpt\nstart=2048, type=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7, name="RAGNAROK_NVME"\n' \
+        | sfdisk -q "$nvme_img"
+    mformat -i "$nvme_img@@1M" -F -v RAGNVME ::
+    printf 'Hello from NVMe SSD via DMA!\n' \
+        | mcopy -i "$nvme_img@@1M" - ::/NVME.TXT
 }
 
 qemu_base_args() {
@@ -133,7 +137,7 @@ try:
                 sent = True
                 # First newline exits live animated splash into shell
                 proc.stdin.write(
-                    b"\nsys\nrtc\nuptime\nselftest\ndmesg | find PMM\ntime echo bench\nmem\npci | head 3\ndisks\ndf\nls\nls /EFI/BOOT\n"
+                    b"\nsys\nrtc\nuptime\nselftest\ndmesg | find PMM\ntime echo bench\nmem\npci | head 3\ndisks\ndf\nls\nls /EFI/BOOT\nmount 1\nread NVME.TXT\nmount 0\n"
                     b"mkdir TESTDIR\ncd TESTDIR\npwd\n"
                     b"write A.TXT subfile\ncopy A.TXT B.TXT\nmove B.TXT C.TXT\n"
                     b"read /TESTDIR/C.TXT\ndel A.TXT\ndel C.TXT\ncd ..\nrmdir TESTDIR\n"
@@ -172,6 +176,8 @@ required = [
     b"IDT #BP test: PASS",
     b"PIT IRQ0",
     b"Arena test: PASS",
+    b"Hello from NVMe SSD",
+    b"ACPI PM1a_CNT=",
 ]
 for needle in required:
     if needle not in buf:

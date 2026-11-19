@@ -46,8 +46,9 @@ FAT32_Entry_Loc :: struct {
 	is_root:     bool,
 }
 
-g_fat32:      FAT32_FS
-g_fat_secbuf: [4096]u8
+g_fat32:         FAT32_FS
+g_fat32_dev_idx: int = -1
+g_fat_secbuf:    [4096]u8
 
 fat32_read_u16 :: proc "contextless" (b: []u8, off: int) -> u16 {
 	return u16(b[off]) | (u16(b[off + 1]) << 8)
@@ -191,10 +192,25 @@ fat32_try_dev :: proc "contextless" (dev: ^Block_Device) -> bool {
 	return fat32_try_bpb(dev, 0)
 }
 
+fat32_mount_dev :: proc "contextless" (idx: int) -> bool {
+	if idx < 0 || idx >= g_block_count {
+		return false
+	}
+	saved := g_fat32
+	if fat32_try_dev(&g_block_devs[idx]) {
+		g_fat32_dev_idx = idx
+		return true
+	}
+	g_fat32 = saved
+	return false
+}
+
 fat32_mount_first :: proc "contextless" () -> bool {
 	g_fat32.mounted = false
+	g_fat32_dev_idx = -1
 	for i := 0; i < g_block_count; i += 1 {
 		if fat32_try_dev(&g_block_devs[i]) {
+			g_fat32_dev_idx = i
 			return true
 		}
 	}
