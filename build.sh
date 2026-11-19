@@ -29,6 +29,7 @@ build() {
         -target:freestanding_amd64_win64 \
         -build-mode:obj \
         -use-single-module \
+        -debug \
         -no-crt \
         -no-entry-point \
         -default-to-nil-allocator \
@@ -41,6 +42,9 @@ build() {
         /subsystem:efi_application \
         /entry:efi_main \
         /nodefaultlib \
+        /debug \
+        /pdb:"$BUILD_DIR/kernel.pdb" \
+        /map:"$BUILD_DIR/kernel.map" \
         /out:"$EFI_OUT" \
         "$BUILD_DIR/kernel.obj" \
         "$BUILD_DIR/arch.obj"
@@ -129,7 +133,7 @@ try:
                 sent = True
                 # First newline exits live animated splash into shell
                 proc.stdin.write(
-                    b"\nsys\nrtc\nmem\npci | head 3\ndisks\ndf\nls\nls /EFI/BOOT\n"
+                    b"\nsys\nrtc\nuptime\ndmesg | find PMM\ntime echo bench\nmem\npci | head 3\ndisks\ndf\nls\nls /EFI/BOOT\n"
                     b"mkdir TESTDIR\ncd TESTDIR\npwd\n"
                     b"write A.TXT subfile\ncopy A.TXT B.TXT\nmove B.TXT C.TXT\n"
                     b"read /TESTDIR/C.TXT\ndel A.TXT\ndel C.TXT\ncd ..\nrmdir TESTDIR\n"
@@ -161,6 +165,10 @@ required = [
     b"68 65 6C 6C 6F",
     b"foo baz",
     b"UTC",
+    b"[INFO]",
+    b"tsc=",
+    b"[time]",
+    b"us (",
     b"Arena test: PASS",
 ]
 for needle in required:
@@ -186,14 +194,74 @@ build_usb() {
     echo "  sudo dd if=$img of=/dev/sdX bs=4M status=progress conv=fsync"
 }
 
+debug_vm() {
+    require_cmd qemu-system-x86_64
+    build
+    qemu_base_args
+    echo "QEMU paused at reset vector on gdbserver :1234 (COM1 on stdio)."
+    echo "Attach with LLDB:"
+    echo "  lldb -o 'target create $EFI_OUT' -o 'gdb-remote localhost:1234'"
+    echo "  # Note ImageBase from COM1 [INFO] ImageBase=..., then slide PE sections:"
+    echo "  #   target modules load --file $EFI_OUT --slide <ImageBase - 0x140000000>"
+    echo "Or GDB:"
+    echo "  gdb -ex 'target remote :1234'"
+    exec qemu-system-x86_64 "${QEMU_ARGS[@]}" \
+        -s -S -no-reboot \
+        -display sdl,gl=off \
+        -serial stdio
+}
+
+asm_dump() {
+    require_cmd llvm-objdump rg
+    if [[ ! -f "$EFI_OUT" ]]; then
+        build
+    fi
+    local sym="${1:-}"
+    if [[ -n "$sym" ]]; then
+        llvm-objdump -d -M intel --demangle "$EFI_OUT" | rg -n -A 45 "$sym"
+    else
+        local out="$BUILD_DIR/kernel.asm"
+        llvm-objdump -d -M intel --demangle "$EFI_OUT" > "$out"
+        echo "Wrote disassembly -> $out ($(wc -l < "$out") lines)"
+    fi
+}
+
+sym_dump() {
+    if [[ ! -f "$BUILD_DIR/kernel.map" ]]; then
+        build
+    fi
+    if command -v llvm-nm >/dev/null 2>&1 && [[ -f "$BUILD_DIR/kernel.obj" ]]; then
+        llvm-nm --size-sort --reverse-sort "$BUILD_DIR/kernel.obj" | head -n 40
+    else
+        head -n 60 "$BUILD_DIR/kernel.map"
+    fi
+}
+
+log_vm() {
+    require_cmd qemu-system-x86_64
+    build
+    qemu_base_args
+    local qlog="$BUILD_DIR/qemu.log"
+    echo "Running QEMU with interrupt/reset tracing -> $qlog"
+    qemu-system-x86_64 "${QEMU_ARGS[@]}" \
+        -d int,cpu_reset -D "$qlog" -no-reboot \
+        -display none \
+        -serial stdio || true
+    echo "Trace written to $qlog ($(wc -l < "$qlog") lines)"
+}
+
 case "${1:-build}" in
     build) build ;;
     usb)   build_usb ;;
     run)   run_vm ;;
     test)  test_vm ;;
+    debug) debug_vm ;;
+    asm)   asm_dump "${2:-}" ;;
+    sym)   sym_dump ;;
+    log)   log_vm ;;
     clean) rm -rf "$BUILD_DIR" ;;
     *)
-        echo "Usage: $0 [build|usb|run|test|clean]" >&2
+        echo "Usage: $0 [build|usb|run|test|debug|asm [sym]|sym|log|clean]" >&2
         exit 1
         ;;
 esac

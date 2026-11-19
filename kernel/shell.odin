@@ -29,7 +29,7 @@ Command :: struct {
 	run:     Cmd_Proc,
 }
 
-g_commands := [31]Command{
+g_commands := [34]Command{
 	{
 		name    = "help",
 		summary = "List commands or show usage for one command",
@@ -53,6 +53,24 @@ g_commands := [31]Command{
 		summary = "Read hardware CMOS Real-Time Clock (UTC)",
 		usage   = "rtc",
 		run     = cmd_rtc,
+	},
+	{
+		name    = "dmesg",
+		summary = "Print kernel boot and driver log ring buffer",
+		usage   = "dmesg",
+		run     = cmd_dmesg,
+	},
+	{
+		name    = "uptime",
+		summary = "Show time since boot and calibrated TSC frequency",
+		usage   = "uptime",
+		run     = cmd_uptime,
+	},
+	{
+		name    = "time",
+		summary = "Benchmark a command or pipeline using RDTSC",
+		usage   = "time <command...>",
+		run     = cmd_time,
 	},
 	{
 		name    = "clear",
@@ -479,6 +497,32 @@ cmd_rtc :: proc(ctx: ^Cmd_Context) -> int {
 	ob_put_bytes(ctx.out, buf[:n])
 	ob_puts(ctx.out, " UTC\n")
 	return 0
+}
+
+cmd_dmesg :: proc(ctx: ^Cmd_Context) -> int {
+	klog_write(ctx.out)
+	return 0
+}
+
+cmd_uptime :: proc(ctx: ^Cmd_Context) -> int {
+	ms := tsc_ms()
+	sec := ms / 1000
+	rem := ms % 1000
+	ob_puts(ctx.out, "up ")
+	ob_put_u64(ctx.out, sec)
+	ob_putc(ctx.out, '.')
+	ob_putc(ctx.out, u8('0' + (rem / 100) % 10))
+	ob_putc(ctx.out, u8('0' + (rem / 10) % 10))
+	ob_putc(ctx.out, u8('0' + rem % 10))
+	ob_puts(ctx.out, "s | tsc=")
+	ob_put_u64(ctx.out, g_tsc_khz / 1000)
+	ob_puts(ctx.out, " MHz\n")
+	return 0
+}
+
+cmd_time :: proc(ctx: ^Cmd_Context) -> int {
+	ob_puts(ctx.out, "Usage: time <command...>\n")
+	return 1
 }
 
 cmd_clear :: proc(ctx: ^Cmd_Context) -> int {
@@ -1098,6 +1142,26 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 	line := shell_trim_ws(raw_line[:eff_len])
 	if len(line) == 0 {
 		return
+	}
+
+	// Benchmark wrapper: "time <command | pipeline>"
+	if len(line) > 5 && line[0] == 't' && line[1] == 'i' && line[2] == 'm' && line[3] == 'e' &&
+	   (line[4] == ' ' || line[4] == '\t') {
+		rest := shell_trim_ws(line[5:])
+		if len(rest) > 0 && !(len(rest) >= 6 && rest[0] == '-' && rest[1] == '-') {
+			t0 := arch_rdtsc()
+			shell_exec_line(rest)
+			dt := arch_rdtsc() - t0
+			us := (dt * 1000) / g_tsc_khz if g_tsc_khz > 0 else u64(0)
+			con_set_color(COL_LTCYAN, COL_BLACK)
+			out_puts("[time] ")
+			out_put_u64(us)
+			out_puts(" us (")
+			out_put_u64(dt)
+			out_puts(" cycles)\n")
+			con_set_color(COL_LTGRAY, COL_BLACK)
+			return
+		}
 	}
 
 	// 2. Split into pipe stages on '|' outside double quotes

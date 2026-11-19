@@ -7,6 +7,9 @@ foreign {
 	arch_inl      :: proc "c" (port: u16) -> u32 ---
 	arch_outl     :: proc "c" (port: u16, val: u32) ---
 	arch_cli      :: proc "c" () ---
+	arch_sti      :: proc "c" () ---
+	arch_rdtsc    :: proc "c" () -> u64 ---
+	arch_read_cr2 :: proc "c" () -> u64 ---
 	arch_hlt      :: proc "c" () ---
 	arch_pause    :: proc "c" () ---
 	arch_mfence   :: proc "c" () ---

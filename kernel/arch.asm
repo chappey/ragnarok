@@ -44,6 +44,23 @@ arch_cli:
     cli
     ret
 
+global arch_sti
+arch_sti:
+    sti
+    ret
+
+global arch_rdtsc
+arch_rdtsc:
+    rdtsc
+    shl rdx, 32
+    or rax, rdx
+    ret
+
+global arch_read_cr2
+arch_read_cr2:
+    mov rax, cr2
+    ret
+
 global arch_hlt
 arch_hlt:
     hlt

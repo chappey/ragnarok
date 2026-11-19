@@ -52,6 +52,17 @@ efi_main :: proc "c" (image_handle: EFI_Handle, st: ^EFI_System_Table) -> EFI_St
 
 	bs := st.boot_services
 
+	// Acquire LoadedImage protocol to record UEFI load base/size for symbolication
+	if bs.handle_protocol != nil {
+		li_guid := EFI_LOADED_IMAGE_PROTOCOL_GUID
+		li_raw: rawptr
+		if bs.handle_protocol(image_handle, &li_guid, &li_raw) == EFI_SUCCESS && li_raw != nil {
+			li := (^EFI_Loaded_Image)(li_raw)
+			g_image_base = li.image_base
+			g_image_size = li.image_size
+		}
+	}
+
 	// Acquire UEFI GOP framebuffer & select best integer-scale mode
 	gop_guid := EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID
 	gop_raw: rawptr
@@ -89,12 +100,67 @@ efi_main :: proc "c" (image_handle: EFI_Handle, st: ^EFI_System_Table) -> EFI_St
 	}
 
 	arch_cli()
+	tsc_init()
+
+	klog_prefix("INFO")
+	klog_puts("ImageBase=")
+	klog_put_hex(g_image_base)
+	klog_puts(" size=")
+	klog_put_u64(g_image_size)
+	klog_puts(" tsc=")
+	klog_put_u64(g_tsc_khz / 1000)
+	klog_puts(" MHz\n")
+
+	klog_prefix("INFO")
+	klog_puts("GOP=")
+	klog_put_u64(u64(fb_w))
+	klog_putc('x')
+	klog_put_u64(u64(fb_h))
+	klog_puts(" fb=")
+	klog_put_hex(u64(uintptr(fb_base)))
+	klog_putc('\n')
+
 	pmm_init(&g_mem_map_buf[0], map_size, desc_size)
+	klog_prefix("INFO")
+	klog_puts("PMM total=")
+	klog_put_u64((g_pmm_total_pages * PAGE_SIZE) / (1024 * 1024))
+	klog_puts(" MiB (")
+	klog_put_u64(g_pmm_total_pages)
+	klog_puts(" pages)\n")
+
 	pci_init()
+	klog_prefix("INFO")
+	klog_puts("PCI enumerated ")
+	klog_put_u64(u64(g_pci_count))
+	klog_puts(" devices\n")
+
 	ahci_init()
 	nvme_init()
-	_ = fat32_mount_first()
+	klog_prefix("INFO")
+	klog_puts("Storage block_devs=")
+	klog_put_u64(u64(g_block_count))
+	klog_putc('\n')
+
+	if fat32_mount_first() {
+		klog_prefix("INFO")
+		klog_puts("FAT32 mounted dev=")
+		klog_puts(g_fat32.dev.name)
+		klog_puts(" part_lba=")
+		klog_put_u64(g_fat32.part_lba)
+		klog_putc('\n')
+	} else {
+		klog_line("WARN", "FAT32 no volume found")
+	}
+
 	xhci_init()
+	if g_xhci.kbd_ready {
+		klog_line("INFO", "xHCI USB3 + HID Boot keyboard ready")
+	} else if g_xhci.present {
+		klog_line("WARN", "xHCI controller active, no HID keyboard found")
+	} else {
+		klog_line("INFO", "xHCI controller not present")
+	}
+
 	gfx_init(fb_base, fb_w, fb_h, fb_pitch)
 	ps2_init()
 	con_init()
