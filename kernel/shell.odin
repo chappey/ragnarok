@@ -27,7 +27,7 @@ Command :: struct {
 	run:     Cmd_Proc,
 }
 
-g_commands := [18]Command{
+g_commands := [24]Command{
 	{
 		name    = "help",
 		summary = "List commands or show usage for one command",
@@ -45,6 +45,12 @@ g_commands := [18]Command{
 		summary = "Show OS, display, input, RAM, and bus summary",
 		usage   = "sys",
 		run     = cmd_sys,
+	},
+	{
+		name    = "rtc",
+		summary = "Read hardware CMOS Real-Time Clock (UTC)",
+		usage   = "rtc",
+		run     = cmd_rtc,
 	},
 	{
 		name    = "clear",
@@ -71,10 +77,40 @@ g_commands := [18]Command{
 		run     = cmd_read,
 	},
 	{
+		name    = "write",
+		summary = "Write text or piped input to a FAT32 8.3 file",
+		usage   = "write <file> [text...]",
+		run     = cmd_write,
+	},
+	{
+		name    = "del",
+		summary = "Delete a file from FAT32 root directory",
+		usage   = "del <file>",
+		run     = cmd_del,
+	},
+	{
 		name    = "find",
 		summary = "Case-insensitive line filter on file or piped input",
 		usage   = "find <pattern> [file]",
 		run     = cmd_find,
+	},
+	{
+		name    = "head",
+		summary = "Print first N lines (default 10) of file or pipe",
+		usage   = "head [n] [file]",
+		run     = cmd_head,
+	},
+	{
+		name    = "tail",
+		summary = "Print last N lines (default 10) of file or pipe",
+		usage   = "tail [n] [file]",
+		run     = cmd_tail,
+	},
+	{
+		name    = "sort",
+		summary = "Sort lines case-insensitively from file or pipe",
+		usage   = "sort [file]",
+		run     = cmd_sort,
 	},
 	{
 		name    = "count",
@@ -347,6 +383,60 @@ cmd_sys :: proc(ctx: ^Cmd_Context) -> int {
 	return 0
 }
 
+cmos_read_reg :: proc "contextless" (reg: u8) -> u8 {
+	arch_outb(0x70, reg)
+	return arch_inb(0x71)
+}
+
+bcd_to_bin :: proc "contextless" (v: u8) -> u8 {
+	return (v & 0x0F) + ((v >> 4) * 10)
+}
+
+ob_put_2d :: proc "contextless" (ob: ^Out_Buf, v: u8) {
+	ob_putc(ob, u8('0' + (v / 10) % 10))
+	ob_putc(ob, u8('0' + v % 10))
+}
+
+cmd_rtc :: proc(ctx: ^Cmd_Context) -> int {
+	for (cmos_read_reg(0x0A) & 0x80) != 0 {
+		arch_pause()
+	}
+	sec   := cmos_read_reg(0x00)
+	min   := cmos_read_reg(0x02)
+	hour  := cmos_read_reg(0x04)
+	day   := cmos_read_reg(0x07)
+	month := cmos_read_reg(0x08)
+	year  := cmos_read_reg(0x09)
+	reg_b := cmos_read_reg(0x0B)
+
+	if (reg_b & 0x04) == 0 {
+		sec   = bcd_to_bin(sec)
+		min   = bcd_to_bin(min)
+		hour  = bcd_to_bin(hour & 0x7F) | (hour & 0x80)
+		day   = bcd_to_bin(day)
+		month = bcd_to_bin(month)
+		year  = bcd_to_bin(year)
+	}
+	if (reg_b & 0x02) == 0 && (hour & 0x80) != 0 {
+		hour = ((hour & 0x7F) + 12) % 24
+	}
+
+	ob_puts(ctx.out, "20")
+	ob_put_2d(ctx.out, year)
+	ob_putc(ctx.out, '-')
+	ob_put_2d(ctx.out, month)
+	ob_putc(ctx.out, '-')
+	ob_put_2d(ctx.out, day)
+	ob_putc(ctx.out, ' ')
+	ob_put_2d(ctx.out, hour)
+	ob_putc(ctx.out, ':')
+	ob_put_2d(ctx.out, min)
+	ob_putc(ctx.out, ':')
+	ob_put_2d(ctx.out, sec)
+	ob_puts(ctx.out, " UTC\n")
+	return 0
+}
+
 cmd_clear :: proc(ctx: ^Cmd_Context) -> int {
 	con_clear()
 	con_flush()
@@ -381,6 +471,169 @@ cmd_read :: proc(ctx: ^Cmd_Context) -> int {
 	}
 	ob_put_bytes(ctx.out, data)
 	if len(data) == 0 || data[len(data) - 1] != '\n' {
+		ob_putc(ctx.out, '\n')
+	}
+	return 0
+}
+
+cmd_write :: proc(ctx: ^Cmd_Context) -> int {
+	if len(ctx.args) < 2 {
+		ob_puts(ctx.out, "Usage: write <file> [text...]\n")
+		return 1
+	}
+	payload: []u8
+	if len(ctx.args) >= 3 {
+		tmp: Out_Buf
+		ob_init(&tmp, ctx.arena)
+		for i := 2; i < len(ctx.args); i += 1 {
+			if i > 2 {
+				ob_putc(&tmp, ' ')
+			}
+			ob_puts(&tmp, ctx.args[i])
+		}
+		ob_putc(&tmp, '\n')
+		payload = ob_bytes(&tmp)
+	} else {
+		payload = ctx.in_buf
+	}
+	if !fat32_write_file(transmute([]u8)ctx.args[1], payload) {
+		ob_puts(ctx.out, "write: failed (use 8.3 name, e.g. NOTE.TXT)\n")
+		return 1
+	}
+	ob_puts(ctx.out, "Wrote ")
+	ob_put_u64(ctx.out, u64(len(payload)))
+	ob_puts(ctx.out, " B -> ")
+	ob_puts(ctx.out, ctx.args[1])
+	ob_putc(ctx.out, '\n')
+	return 0
+}
+
+cmd_del :: proc(ctx: ^Cmd_Context) -> int {
+	if len(ctx.args) < 2 {
+		ob_puts(ctx.out, "Usage: del <file>\n")
+		return 1
+	}
+	if !fat32_del_file(transmute([]u8)ctx.args[1]) {
+		ob_puts(ctx.out, "del: file not found\n")
+		return 1
+	}
+	ob_puts(ctx.out, "Deleted ")
+	ob_puts(ctx.out, ctx.args[1])
+	ob_putc(ctx.out, '\n')
+	return 0
+}
+
+split_lines_arena :: proc(src: []u8) -> [dynamic][]u8 {
+	lines := make([dynamic][]u8)
+	start := 0
+	for i := 0; i <= len(src); i += 1 {
+		if i == len(src) || src[i] == '\n' {
+			end := i
+			if end > start && src[end - 1] == '\r' {
+				end -= 1
+			}
+			if !(i == len(src) && start == len(src)) {
+				append(&lines, src[start:end])
+			}
+			start = i + 1
+		}
+	}
+	return lines
+}
+
+line_cmp_ci :: proc "contextless" (a, b: []u8) -> int {
+	n := len(a) if len(a) < len(b) else len(b)
+	for i := 0; i < n; i += 1 {
+		ca := ascii_upper(a[i])
+		cb := ascii_upper(b[i])
+		if ca < cb { return -1 }
+		if ca > cb { return 1 }
+	}
+	if len(a) < len(b) { return -1 }
+	if len(a) > len(b) { return 1 }
+	return 0
+}
+
+cmd_head :: proc(ctx: ^Cmd_Context) -> int {
+	n := u64(10)
+	src := ctx.in_buf
+	arg_idx := 1
+	if len(ctx.args) >= 2 {
+		if parsed, ok := parse_dec_u64(ctx.args[1]); ok {
+			n = parsed
+			arg_idx = 2
+		}
+	}
+	if arg_idx < len(ctx.args) {
+		data, ok := fat32_read_file(transmute([]u8)ctx.args[arg_idx], ctx.arena)
+		if !ok {
+			ob_puts(ctx.out, "head: file not found\n")
+			return 1
+		}
+		src = data
+	}
+	lines := split_lines_arena(src)
+	limit := int(n)
+	if limit > len(lines) { limit = len(lines) }
+	for i := 0; i < limit; i += 1 {
+		ob_put_bytes(ctx.out, lines[i])
+		ob_putc(ctx.out, '\n')
+	}
+	return 0
+}
+
+cmd_tail :: proc(ctx: ^Cmd_Context) -> int {
+	n := u64(10)
+	src := ctx.in_buf
+	arg_idx := 1
+	if len(ctx.args) >= 2 {
+		if parsed, ok := parse_dec_u64(ctx.args[1]); ok {
+			n = parsed
+			arg_idx = 2
+		}
+	}
+	if arg_idx < len(ctx.args) {
+		data, ok := fat32_read_file(transmute([]u8)ctx.args[arg_idx], ctx.arena)
+		if !ok {
+			ob_puts(ctx.out, "tail: file not found\n")
+			return 1
+		}
+		src = data
+	}
+	lines := split_lines_arena(src)
+	start := 0
+	if len(lines) > int(n) {
+		start = len(lines) - int(n)
+	}
+	for i := start; i < len(lines); i += 1 {
+		ob_put_bytes(ctx.out, lines[i])
+		ob_putc(ctx.out, '\n')
+	}
+	return 0
+}
+
+cmd_sort :: proc(ctx: ^Cmd_Context) -> int {
+	src := ctx.in_buf
+	if len(ctx.args) >= 2 {
+		data, ok := fat32_read_file(transmute([]u8)ctx.args[1], ctx.arena)
+		if !ok {
+			ob_puts(ctx.out, "sort: file not found\n")
+			return 1
+		}
+		src = data
+	}
+	lines := split_lines_arena(src)
+	for i := 1; i < len(lines); i += 1 {
+		key := lines[i]
+		j := i - 1
+		for j >= 0 && line_cmp_ci(lines[j], key) > 0 {
+			lines[j + 1] = lines[j]
+			j -= 1
+		}
+		lines[j + 1] = key
+	}
+	for i := 0; i < len(lines); i += 1 {
+		ob_put_bytes(ctx.out, lines[i])
 		ob_putc(ctx.out, '\n')
 	}
 	return 0

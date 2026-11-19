@@ -129,8 +129,9 @@ try:
                 sent = True
                 # First newline exits live animated splash into shell
                 proc.stdin.write(
-                    b"\nsys\nmem\npci | find NVMe\ndisks\nls\n"
+                    b"\nsys\nrtc\nmem\npci | head 3\ndisks\nls\n"
                     b"read WELCOME.TXT | find AHCI\nread WELCOME.TXT | count\n"
+                    b"write NOTE.TXT hello from ragnarok\nread NOTE.TXT\ndel NOTE.TXT\n"
                     b"echo hello | hex\n"
                     b"echo foo bar\x17baz\n"
                     b"\x1b[A\n"
@@ -148,11 +149,14 @@ finally:
 required = [
     b"RAGNAROK_READY",
     b"USB=kbd",
-    b"NVMe SSD",
+    b"[TXT] WELCOME.TXT",
     b"Read directly via AHCI/NVMe DMA",
+    b"hello from ragnarok",
+    b"Deleted NOTE.TXT",
     b"lines=2",
     b"68 65 6C 6C 6F",
     b"foo baz",
+    b"UTC",
     b"Arena test: PASS",
 ]
 for needle in required:
