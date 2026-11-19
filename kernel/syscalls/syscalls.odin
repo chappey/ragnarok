@@ -3,6 +3,8 @@ package syscalls
 // Leaf syscall interface between Ragnarök kernel (Ring-0) and userspace programs.
 // Imports nothing so userspace/ never depends on kernel internals.
 
+SYSCALL_ABI_VERSION :: u32(2)
+
 GFX_WIDTH  :: 640
 GFX_HEIGHT :: 480
 
@@ -24,7 +26,20 @@ COL_YELLOW      :: u8(14)
 COL_WHITE       :: u8(15)
 COL_TRANSPARENT :: u8(255)
 
+Dir_Entry :: struct {
+	name:     [64]u8,
+	name_len: u32,
+	size:     u32,
+	is_dir:   bool,
+}
+
+Cmd_Context :: struct {
+	args:   []string,
+	in_buf: []u8,
+}
+
 Table :: struct {
+	abi_version:     u32,
 	clear:           proc "contextless" (col: u8),
 	plot:            proc "contextless" (x, y: i32, col: u8),
 	hline:           proc "contextless" (x0, x1, y: i32, col: u8),
@@ -37,11 +52,20 @@ Table :: struct {
 	set_palette:     proc "contextless" (pal: [16]u32),
 	reset_palette:   proc "contextless" (),
 	wait_ms_or_key:  proc "contextless" (ms: u32) -> (u8, bool),
+	ticks_ms:        proc "contextless" () -> u64,
 	rng_next:        proc "contextless" () -> u32,
 	isin:            proc "contextless" (angle: i32) -> i32,
 	icos:            proc "contextless" (angle: i32) -> i32,
 	print:           proc "contextless" (s: string),
+	print_bytes:     proc "contextless" (b: []u8),
+	alloc:           proc "contextless" (size, align: u64) -> rawptr,
+	read_file:       proc "contextless" (path: string) -> ([]u8, bool),
+	write_file:      proc "contextless" (path: string, data: []u8) -> bool,
+	list_dir:        proc "contextless" (path: string) -> ([]Dir_Entry, bool),
+	cwd:             proc "contextless" () -> string,
 }
+
+Prg_Entry :: #type proc "c" (sys: ^Table, ctx: ^Cmd_Context) -> i32
 
 App_Proc :: #type proc(sys: ^Table, args: []string) -> int
 

@@ -203,6 +203,27 @@ exception_handler :: proc "c" (f: ^Interrupt_Frame) {
 	panic_reg_row(224, "R13 ", f.r13,      "R14 ", f.r14)
 	panic_reg_row(240, "R15 ", f.r15,      "BASE", g_image_base)
 
+	if g_prg_active_base != 0 && f.rip >= g_prg_active_base && f.rip < g_prg_active_base + g_prg_active_size {
+		prg_name := string(g_prg_active_name[:g_prg_active_name_len])
+		prg_off  := f.rip - g_prg_active_base
+		serial_puts("PRG: ")
+		serial_puts(prg_name)
+		serial_puts("  base=")
+		serial_put_hex(g_prg_active_base)
+		serial_puts("  off=")
+		serial_put_hex(prg_off)
+		serial_puts("\n")
+		if g_fb.base != nil {
+			b1, b2: [18]u8
+			gfx_text(16, 256, "PRG", COL_YELLOW, COL_BLACK)
+			gfx_text(64, 256, prg_name, COL_WHITE, COL_BLACK)
+			gfx_text(256, 256, "BASE", COL_LTCYAN, COL_BLACK)
+			gfx_text(304, 256, panic_fmt_hex64(b1[:], g_prg_active_base), COL_WHITE, COL_BLACK)
+			gfx_text(464, 256, "OFF", COL_LTCYAN, COL_BLACK)
+			gfx_text(496, 256, panic_fmt_hex64(b2[:], prg_off), COL_WHITE, COL_BLACK)
+		}
+	}
+
 	if g_fb.base != nil {
 		gfx_text(16, 272, "System halted cleanly (attach LLDB or inspect COM1 log).", COL_LTRED, COL_BLACK)
 		gfx_present()

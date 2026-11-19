@@ -1,5 +1,7 @@
 package kernel
 
+import "syscalls"
+
 // GPT / MBR / Superfloppy FAT32 driver built on top of Block_Device.
 // Supports subdirectories, path resolution (/, ., ..), LFN + 8.3 reads,
 // directory cluster growth, write/del/mkdir/rmdir/copy/move, and df.
@@ -779,6 +781,132 @@ fat32_ls_path :: proc "contextless" (path: []u8, ob: ^Out_Buf) -> bool {
 		cl = fat32_next_cluster(cl)
 	}
 	return true
+}
+
+fat32_list_dir :: proc "contextless" (path: []u8, a: ^Arena) -> ([]syscalls.Dir_Entry, bool) {
+	if !g_fat32.mounted || a == nil {
+		return nil, false
+	}
+	start_cl := g_fat32.cwd_cluster
+	if len(path) > 0 {
+		loc, ok := fat32_resolve_path(path)
+		if !ok || (loc.attr & 0x10) == 0 {
+			return nil, false
+		}
+		start_cl = loc.first_cl if loc.first_cl >= 2 else g_fat32.root_cluster
+	}
+
+	// Pass 1: count valid directory entries
+	count := 0
+	cl := start_cl
+	done := false
+	for !done && cl >= 2 && cl < 0x0FFF_FFF8 {
+		base_lba := fat32_cluster_to_lba(cl)
+		for s := u32(0); !done && s < g_fat32.sectors_per_cluster; s += 1 {
+			if !block_read(g_fat32.dev, base_lba + u64(s), 1, &g_fat_secbuf[0]) {
+				return nil, false
+			}
+			for e := 0; e < 512; e += 32 {
+				ent := g_fat_secbuf[e : e + 32]
+				if ent[0] == 0x00 {
+					done = true
+					break
+				}
+				if ent[0] == 0xE5 {
+					continue
+				}
+				attr := ent[11]
+				if attr == 0x0F || (attr & 0x08) != 0 {
+					continue
+				}
+				count += 1
+			}
+		}
+		if !done {
+			cl = fat32_next_cluster(cl)
+		}
+	}
+
+	if count == 0 {
+		return nil, true
+	}
+
+	raw := arena_alloc(a, u64(count) * u64(size_of(syscalls.Dir_Entry)), align_of(syscalls.Dir_Entry))
+	if raw == nil {
+		return nil, false
+	}
+	entries := ([^]syscalls.Dir_Entry)(raw)[:count]
+
+	// Pass 2: populate entries
+	name_buf: [16]u8
+	lfn_buf:  [260]u8
+	lfn_len  := 0
+	lfn_csum := u8(0)
+	lfn_valid := false
+
+	idx := 0
+	cl = start_cl
+	done = false
+	for !done && cl >= 2 && cl < 0x0FFF_FFF8 {
+		base_lba := fat32_cluster_to_lba(cl)
+		for s := u32(0); !done && s < g_fat32.sectors_per_cluster; s += 1 {
+			if !block_read(g_fat32.dev, base_lba + u64(s), 1, &g_fat_secbuf[0]) {
+				return nil, false
+			}
+			for e := 0; e < 512; e += 32 {
+				ent := g_fat_secbuf[e : e + 32]
+				if ent[0] == 0x00 {
+					done = true
+					break
+				}
+				if ent[0] == 0xE5 {
+					lfn_valid = false
+					continue
+				}
+				attr := ent[11]
+				if attr == 0x0F {
+					fat32_lfn_extract(ent, lfn_buf[:], &lfn_len)
+					lfn_csum  = ent[13]
+					lfn_valid = true
+					continue
+				}
+				if (attr & 0x08) != 0 {
+					lfn_valid = false
+					continue
+				}
+
+				disp: []u8
+				if lfn_valid && lfn_len > 0 && lfn_csum == fat32_83_checksum(ent[:11]) {
+					disp = lfn_buf[:lfn_len]
+				} else {
+					nlen := fat32_format_83(ent[:11], name_buf[:])
+					disp = name_buf[:nlen]
+				}
+				lfn_valid = false
+
+				if idx < count {
+					entry := syscalls.Dir_Entry{}
+					n := len(disp)
+					if n > len(entry.name) {
+						n = len(entry.name)
+					}
+					for k := 0; k < n; k += 1 {
+						entry.name[k] = disp[k]
+					}
+					entry.name_len = u32(n)
+					entry.is_dir   = (attr & 0x10) != 0
+					entry.size     = 0 if entry.is_dir else fat32_read_u32(ent, 28)
+					entries[idx]   = entry
+					idx += 1
+				}
+			}
+		}
+		if !done {
+			cl = fat32_next_cluster(cl)
+		}
+	}
+
+	return entries[:idx], true
 }
 
 fat32_read_file :: proc "contextless" (path: []u8, a: ^Arena) -> ([]u8, bool) {

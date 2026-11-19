@@ -29,7 +29,7 @@ Command :: struct {
 	run:     Cmd_Proc,
 }
 
-g_commands := [36]Command{
+g_commands := [37]Command{
 	{
 		name    = "help",
 		summary = "List commands or show usage for one command",
@@ -163,6 +163,12 @@ g_commands := [36]Command{
 		run     = cmd_mount,
 	},
 	{
+		name    = "exec",
+		summary = "Load and execute a standalone .prg binary from FAT32",
+		usage   = "exec <file.prg> [args...]",
+		run     = cmd_exec,
+	},
+	{
 		name    = "find",
 		summary = "Case-insensitive line filter on file or piped input",
 		usage   = "find <pattern> [file]",
@@ -251,25 +257,6 @@ g_commands := [36]Command{
 // ---------------------------------------------------------------------------
 // Shared formatting / parsing helpers
 // ---------------------------------------------------------------------------
-
-g_syscalls := syscalls.Table{
-	clear          = gfx_clear,
-	plot           = gfx_plot,
-	hline          = gfx_hline,
-	line           = gfx_line,
-	rect           = gfx_rect,
-	disc           = gfx_disc,
-	char           = gfx_char,
-	text           = gfx_text,
-	present        = gfx_present,
-	set_palette    = gfx_set_palette,
-	reset_palette  = gfx_reset_palette,
-	wait_ms_or_key = pit_wait_ms_or_key_char,
-	rng_next       = rng_next,
-	isin           = isin,
-	icos           = icos,
-	print          = out_puts,
-}
 
 shell_find_cmd :: proc "contextless" (name: string) -> ^Command {
 	for i := 0; i < len(g_commands); i += 1 {
@@ -698,6 +685,27 @@ cmd_mount :: proc(ctx: ^Cmd_Context) -> int {
 	ob_puts(ctx.out, g_fat32.dev.name)
 	ob_putc(ctx.out, '\n')
 	return 0
+}
+
+cmd_exec :: proc(ctx: ^Cmd_Context) -> int {
+	if len(ctx.args) < 2 {
+		ob_puts(ctx.out, "Usage: exec <file.prg> [args...]\n")
+		return 1
+	}
+	resolved, ok := prg_resolve_path(ctx.args[1], ctx.arena)
+	if !ok {
+		ob_puts(ctx.out, "exec: program not found: ")
+		ob_puts(ctx.out, ctx.args[1])
+		ob_putc(ctx.out, '\n')
+		return 1
+	}
+	sub_ctx := Cmd_Context{
+		args   = ctx.args[1:],
+		in_buf = ctx.in_buf,
+		out    = ctx.out,
+		arena  = ctx.arena,
+	}
+	return prg_exec_file(resolved, &sub_ctx)
 }
 
 cmd_read :: proc(ctx: ^Cmd_Context) -> int {
@@ -1292,7 +1300,12 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 
 		cmd := shell_find_cmd(args_buf[0])
 		app := shell_find_app(args_buf[0]) if cmd == nil else nil
+		prg_path := ""
+		prg_ok   := false
 		if cmd == nil && app == nil {
+			prg_path, prg_ok = prg_resolve_path(args_buf[0], &cur_arena)
+		}
+		if cmd == nil && app == nil && !prg_ok {
 			con_set_color(COL_LTRED, COL_BLACK)
 			out_puts("Unknown command: ")
 			out_puts(args_buf[0])
@@ -1305,10 +1318,12 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 		}
 
 		want_help := false
-		for i := 1; i < argc; i += 1 {
-			if args_buf[i] == "--help" {
-				want_help = true
-				break
+		if (cmd != nil && (cmd.name != "exec" || (argc >= 2 && args_buf[1] == "--help"))) || app != nil {
+			for i := 1; i < argc; i += 1 {
+				if args_buf[i] == "--help" {
+					want_help = true
+					break
+				}
 			}
 		}
 
@@ -1321,7 +1336,7 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 			ob_puts(&cur_out, "\n  ")
 			ob_puts(&cur_out, summary_str)
 			ob_putc(&cur_out, '\n')
-		} else if cmd != nil {
+		} else if cmd != nil || prg_ok {
 			in_slice: []u8 = nil
 			if has_prev {
 				in_slice = ob_bytes(&prev_out)
@@ -1332,7 +1347,11 @@ shell_exec_line :: proc "contextless" (raw_line: []u8) {
 				out    = &cur_out,
 				arena  = &cur_arena,
 			}
-			rc = shell_dispatch(cmd, &cmd_ctx)
+			if cmd != nil {
+				rc = shell_dispatch(cmd, &cmd_ctx)
+			} else {
+				rc = prg_exec_file(prg_path, &cmd_ctx)
+			}
 		} else {
 			rc = shell_dispatch_app(app, &cur_arena, args_buf[:argc])
 		}
