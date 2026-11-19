@@ -36,6 +36,26 @@ arch_hlt:
     hlt
     ret
 
+global arch_pause
+arch_pause:
+    pause
+    ret
+
+global arch_reboot
+arch_reboot:
+    cli
+    ; Try i8042 keyboard controller CPU reset pulse
+    mov dx, 0x64
+    mov al, 0xFE
+    out dx, al
+    ; Intel PCH CF9 full reset (works on ThinkPad T480 & OptiPlex 7020)
+    mov dx, 0xCF9
+    mov al, 0x06
+    out dx, al
+.hang:
+    hlt
+    jmp .hang
+
 global arch_poweroff
 arch_poweroff:
     ; QEMU PIIX4 / Q35 ACPI S5 poweroff

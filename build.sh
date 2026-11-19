@@ -94,7 +94,8 @@ try:
             buf += chunk
             if not sent and b"RAGNAROK_READY" in buf:
                 sent = True
-                proc.stdin.write(b"info\nhalt\n")
+                # First newline exits live animated splash into shell
+                proc.stdin.write(b"\ninfo\nhalt\n")
                 proc.stdin.flush()
         if proc.poll() is not None:
             break
@@ -110,13 +111,31 @@ print("\nPASS: Ragnarök booted via Direct UEFI -> Ring-0 -> Shell -> ACPI power
 PY
 }
 
+build_usb() {
+    require_cmd sfdisk mformat mmd mcopy truncate
+    build
+    local img="$BUILD_DIR/ragnarok.img"
+    rm -f "$img"
+    truncate -s 64M "$img"
+    # GPT with a single EFI System Partition starting at 1 MiB (sector 2048)
+    printf 'label: gpt\nstart=2048, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="RAGNAROK_ESP"\n' \
+        | sfdisk -q "$img"
+    mformat -i "$img@@1M" -F -v RAGNAROK ::
+    mmd     -i "$img@@1M" ::/EFI ::/EFI/BOOT
+    mcopy   -i "$img@@1M" "$EFI_OUT" ::/EFI/BOOT/BOOTX64.EFI
+    echo "Built bootable UEFI USB image -> $img ($(stat -c%s "$img") bytes)"
+    echo "Flash to USB (replace /dev/sdX carefully!):"
+    echo "  sudo dd if=$img of=/dev/sdX bs=4M status=progress conv=fsync"
+}
+
 case "${1:-build}" in
     build) build ;;
+    usb)   build_usb ;;
     run)   run_vm ;;
     test)  test_vm ;;
     clean) rm -rf "$BUILD_DIR" ;;
     *)
-        echo "Usage: $0 [build|run|test|clean]" >&2
+        echo "Usage: $0 [build|usb|run|test|clean]" >&2
         exit 1
         ;;
 esac

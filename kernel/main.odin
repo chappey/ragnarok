@@ -3,7 +3,7 @@ package kernel
 g_mem_map_buf: [16384]u8
 
 // Pick the cleanest GOP mode for our 640x480 logical canvas:
-// prefer exact 2x (1280x960), then 1280x1024 (2x with small letterbox), then native 640x480.
+// prefer exact 2x (1280x960), then 1280x1024, 1920x1080, or native 640x480.
 select_best_gop_mode :: proc "c" (gop: ^EFI_GOP) {
 	if gop == nil || gop.mode == nil || gop.query_mode == nil || gop.set_mode == nil {
 		return
@@ -17,7 +17,6 @@ select_best_gop_mode :: proc "c" (gop: ^EFI_GOP) {
 		if gop.query_mode(gop, m, &info_size, &info) != EFI_SUCCESS || info == nil {
 			continue
 		}
-		// Only accept linear 32-bit BGRX/RGBX modes (pixel_format 0 or 1)
 		if info.pixel_format > 1 {
 			continue
 		}
@@ -25,15 +24,15 @@ select_best_gop_mode :: proc "c" (gop: ^EFI_GOP) {
 		h := info.vertical_resolution
 		score := u32(0)
 		if w == 1280 && h == 960 {
-			score = 100 // exact 2x
+			score = 100
 		} else if w == 1280 && h == 1024 {
-			score = 90  // 2x with tiny vertical letterbox
+			score = 90
 		} else if w == 1920 && h == 1080 {
-			score = 85  // 2x on 1080p
+			score = 85
 		} else if w == 640 && h == 480 {
-			score = 80  // exact 1x
+			score = 80
 		} else if w >= 1280 && h >= 960 {
-			score = 70  // >= 2x
+			score = 70
 		}
 		if score > best_score {
 			best_score = score
@@ -66,15 +65,6 @@ efi_main :: proc "c" (image_handle: EFI_Handle, st: ^EFI_System_Table) -> EFI_St
 		fb_w     = gop.mode.info.horizontal_resolution
 		fb_h     = gop.mode.info.vertical_resolution
 		fb_pitch = gop.mode.info.pixels_per_scan_line
-		serial_puts("GOP: ")
-		serial_put_u64(u64(fb_w))
-		serial_putc('x')
-		serial_put_u64(u64(fb_h))
-		serial_puts(" fb=")
-		serial_put_hex(gop.mode.frame_buffer_base)
-		serial_puts("\n")
-	} else {
-		serial_puts("GOP: unavailable\n")
 	}
 
 	// ExitBootServices -> full bare-metal Ring-0 ownership
@@ -89,7 +79,6 @@ efi_main :: proc "c" (image_handle: EFI_Handle, st: ^EFI_System_Table) -> EFI_St
 	}
 	status = bs.exit_boot_services(image_handle, map_key)
 	if status != EFI_SUCCESS {
-		// Retry once per UEFI spec if map key changed
 		map_size = len(g_mem_map_buf)
 		bs.get_memory_map(&map_size, &g_mem_map_buf[0], &map_key, &desc_size, &desc_ver)
 		status = bs.exit_boot_services(image_handle, map_key)
@@ -101,29 +90,63 @@ efi_main :: proc "c" (image_handle: EFI_Handle, st: ^EFI_System_Table) -> EFI_St
 
 	arch_cli()
 	gfx_init(fb_base, fb_w, fb_h, fb_pitch)
+	ps2_init()
+	con_init()
 	kernel_main(map_size, desc_size)
 	return EFI_SUCCESS
 }
 
-kernel_main :: proc "contextless" (map_size, desc_size: uintptr) {
-	gfx_draw_splash()
-
-	serial_puts("Canvas: 640x480x16 -> scale=")
-	serial_put_u64(u64(g_fb.scale))
-	serial_puts("x off=(")
-	serial_put_u64(u64(g_fb.off_x))
-	serial_putc(',')
-	serial_put_u64(u64(g_fb.off_y))
-	serial_puts(")\n")
-
-	serial_puts("Ring-0 active (ExitBootServices OK, mem_descs=")
-	if desc_size > 0 {
-		serial_put_u64(u64(map_size / desc_size))
-	} else {
-		serial_putc('0')
+input_getc :: proc "contextless" () -> u8 {
+	for {
+		if ch, ok := ps2_poll_char(); ok {
+			return ch
+		}
+		if ch, ok := serial_poll_char(); ok {
+			return ch
+		}
+		arch_pause()
 	}
-	serial_puts(")\n")
+}
+
+kernel_main :: proc "contextless" (map_size, desc_size: uintptr) {
+	// Signal readiness on COM1 and boot straight into the live animated Ragnarok splash
 	serial_puts("RAGNAROK_READY\n")
+	run_ragnarok_splash()
+
+	con_set_color(COL_YELLOW, COL_BLACK)
+	out_puts("================================================================================\n")
+	con_set_color(COL_LTRED, COL_BLACK)
+	out_puts("  RAGNAROK OS v0.1  --  TWILIGHT OF THE GODS  (x86_64 Ring-0, Odin + UEFI)\n")
+	con_set_color(COL_YELLOW, COL_BLACK)
+	out_puts("================================================================================\n")
+
+	con_set_color(COL_LTCYAN, COL_BLACK)
+	out_puts("GOP:    ")
+	out_put_u64(u64(g_fb.width))
+	out_putc('x')
+	out_put_u64(u64(g_fb.height))
+	out_puts("  ->  640x480x16 canvas (scale=")
+	out_put_u64(u64(g_fb.scale))
+	out_puts("x, off=")
+	out_put_u64(u64(g_fb.off_x))
+	out_putc(',')
+	out_put_u64(u64(g_fb.off_y))
+	out_puts(")\n")
+
+	out_puts("Input:  PS/2=")
+	out_puts("yes" if g_ps2_present else "no")
+	out_puts("  COM1=")
+	out_puts("yes" if g_serial_present else "no")
+	out_puts("  UEFI mem_descs=")
+	if desc_size > 0 {
+		out_put_u64(u64(map_size / desc_size))
+	} else {
+		out_putc('0')
+	}
+	out_puts("\n")
+
+	con_set_color(COL_LTGRAY, COL_BLACK)
+	out_puts("Type 'help' for commands, 'splash' for twilight animation, 'reboot' to restart.\n\n")
 
 	shell_loop()
 }
@@ -143,55 +166,81 @@ str_eq :: proc "contextless" (a: []u8, b: string) -> bool {
 shell_loop :: proc "contextless" () {
 	line: [128]u8
 	for {
-		serial_puts("ragnarok> ")
+		con_set_color(COL_LTGREEN, COL_BLACK)
+		out_puts("ragnarok> ")
+		con_set_color(COL_WHITE, COL_BLACK)
 		n := 0
 		for {
-			c := serial_getc()
+			c := input_getc()
+			if c == 0x0C { // Ctrl+L
+				con_clear()
+				con_set_color(COL_LTGREEN, COL_BLACK)
+				out_puts("ragnarok> ")
+				con_set_color(COL_WHITE, COL_BLACK)
+				for i := 0; i < n; i += 1 {
+					con_putc_raw(line[i])
+				}
+				con_flush()
+				continue
+			}
 			if c == '\r' || c == '\n' {
-				serial_puts("\n")
+				out_puts("\n")
 				break
 			}
 			if (c == 0x08 || c == 0x7F) && n > 0 {
 				n -= 1
-				serial_puts("\b \b")
+				out_puts("\b \b")
 			} else if c >= 0x20 && c < 0x7F && n < len(line) {
 				line[n] = c
 				n += 1
-				serial_putc(c)
+				out_putc(c)
+				con_flush()
 			}
 		}
 
+		con_set_color(COL_LTGRAY, COL_BLACK)
 		cmd := line[:n]
 		if n == 0 {
 			continue
 		} else if str_eq(cmd, "help") {
-			serial_puts("Commands: help, info, splash, palette norse, palette templeos, clear, halt\n")
+			out_puts("Commands:\n")
+			out_puts("  help              Show this help\n")
+			out_puts("  info              System & display info\n")
+			out_puts("  splash            Show Ragnarok twilight splash (press any key to return)\n")
+			out_puts("  palette norse     Switch LUT to Norse dusk palette\n")
+			out_puts("  palette templeos  Switch LUT to TempleOS 16-color default\n")
+			out_puts("  clear             Clear console (or Ctrl+L)\n")
+			out_puts("  reboot            Reboot machine (i8042 / PCH CF9)\n")
+			out_puts("  halt              Power off (QEMU ACPI) or halt CPU\n")
 		} else if str_eq(cmd, "info") {
-			serial_puts("Ragnarok OS v0.1 | x86_64 Ring-0 | 640x480x16 Logical Canvas\n")
+			out_puts("Ragnarok OS v0.1 | x86_64 Ring-0 | 640x480x16 Logical Canvas\n")
 		} else if str_eq(cmd, "splash") {
-			gfx_draw_splash()
-			serial_puts("Splash rendered.\n")
+			run_ragnarok_splash()
+			con_flush()
 		} else if str_eq(cmd, "palette norse") {
 			gfx_set_palette(PALETTE_NORSE)
-			gfx_present()
-			serial_puts("Palette swapped -> Norse dusk LUT.\n")
+			con_flush()
+			out_puts("Palette swapped -> Norse dusk LUT.\n")
 		} else if str_eq(cmd, "palette templeos") {
 			gfx_reset_palette()
-			gfx_present()
-			serial_puts("Palette swapped -> TempleOS 16-color default LUT.\n")
+			con_flush()
+			out_puts("Palette swapped -> TempleOS 16-color default LUT.\n")
 		} else if str_eq(cmd, "clear") {
-			gfx_clear(COL_BLACK)
-			gfx_present()
-			serial_puts("Canvas cleared.\n")
+			con_clear()
+			con_flush()
+		} else if str_eq(cmd, "reboot") {
+			out_puts("Rebooting...\n")
+			arch_reboot()
 		} else if str_eq(cmd, "halt") || str_eq(cmd, "poweroff") {
-			serial_puts("Powering off...\n")
+			out_puts("Powering off...\n")
 			arch_poweroff()
 		} else {
-			serial_puts("Unknown command: ")
+			con_set_color(COL_LTRED, COL_BLACK)
+			out_puts("Unknown command: ")
 			for i := 0; i < n; i += 1 {
-				serial_putc(cmd[i])
+				out_putc(cmd[i])
 			}
-			serial_puts("\n")
+			out_puts("\n")
 		}
 	}
 }
