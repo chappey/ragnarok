@@ -53,9 +53,12 @@ qemu_base_args() {
         -cpu host
         -m 512M
         -smp 2
-        -nic none
+        -nodefaults
+        -vga std
+        -boot menu=off
         -drive "if=pflash,format=raw,readonly=on,file=$OVMF"
-        -drive "format=raw,file=fat:rw:$ESP_DIR"
+        -drive "if=none,id=esp,format=raw,file=fat:rw:$ESP_DIR"
+        -device "ide-hd,drive=esp,bootindex=1"
     )
 }
 
