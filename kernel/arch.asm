@@ -54,6 +54,11 @@ arch_pause:
     pause
     ret
 
+global arch_mfence
+arch_mfence:
+    mfence
+    ret
+
 global arch_reboot
 arch_reboot:
     cli

@@ -91,6 +91,9 @@ efi_main :: proc "c" (image_handle: EFI_Handle, st: ^EFI_System_Table) -> EFI_St
 	arch_cli()
 	pmm_init(&g_mem_map_buf[0], map_size, desc_size)
 	pci_init()
+	ahci_init()
+	nvme_init()
+	_ = fat32_mount_first()
 	gfx_init(fb_base, fb_w, fb_h, fb_pitch)
 	ps2_init()
 	con_init()
@@ -143,10 +146,12 @@ kernel_main :: proc "contextless" (map_size, desc_size: uintptr) {
 	out_put_u64((g_pmm_free_pages * PAGE_SIZE) / (1024 * 1024))
 	out_puts(" MiB  PCI=")
 	out_put_u64(u64(g_pci_count))
-	out_puts(" devs\n")
+	out_puts("  BLK=")
+	out_put_u64(u64(g_block_count))
+	out_puts("\n")
 
 	con_set_color(COL_LTGRAY, COL_BLACK)
-	out_puts("Type 'help', 'mem', 'lspci', 'splash', or 'reboot'.\n\n")
+	out_puts("Type 'help', 'mem', 'lspci', 'lsblk', 'ls', 'cat <file>', or 'splash'.\n\n")
 
 	shell_loop()
 }
@@ -208,6 +213,9 @@ shell_loop :: proc "contextless" () {
 			out_puts("  info              System & display info\n")
 			out_puts("  mem               Show physical RAM stats & run DMA page alloc test\n")
 			out_puts("  lspci             List discovered PCI devices\n")
+			out_puts("  lsblk             List AHCI / NVMe block devices\n")
+			out_puts("  ls                List files in mounted FAT32 root directory\n")
+			out_puts("  cat <file>        Print a file from the mounted FAT32 volume\n")
 			out_puts("  splash            Show Ragnarok twilight splash (press any key to return)\n")
 			out_puts("  palette norse     Switch LUT to Norse dusk palette (default)\n")
 			out_puts("  palette templeos  Switch LUT to classic TempleOS 16-color palette\n")
@@ -243,6 +251,12 @@ shell_loop :: proc "contextless" () {
 			}
 		} else if str_eq(cmd, "lspci") {
 			pci_print_devices()
+		} else if str_eq(cmd, "lsblk") {
+			block_print_devices()
+		} else if str_eq(cmd, "ls") {
+			fat32_ls()
+		} else if len(cmd) > 4 && cmd[0] == 'c' && cmd[1] == 'a' && cmd[2] == 't' && cmd[3] == ' ' {
+			fat32_cat(cmd[4:])
 		} else if str_eq(cmd, "splash") {
 			run_ragnarok_splash()
 			con_flush()

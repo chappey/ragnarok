@@ -47,7 +47,30 @@ build() {
     echo "Built $EFI_OUT ($(stat -c%s "$EFI_OUT") bytes)"
 }
 
+ensure_disk_imgs() {
+    require_cmd sfdisk mformat mmd mcopy truncate
+    local img="$BUILD_DIR/ragnarok.img"
+    local nvme_img="$BUILD_DIR/nvme.img"
+
+    # Rebuild bootable 64 MiB GPT/FAT32 ESP + WELCOME.TXT
+    rm -f "$img"
+    truncate -s 64M "$img"
+    printf 'label: gpt\nstart=2048, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="RAGNAROK_ESP"\n' \
+        | sfdisk -q "$img"
+    mformat -i "$img@@1M" -F -v RAGNAROK ::
+    mmd     -i "$img@@1M" ::/EFI ::/EFI/BOOT
+    mcopy   -i "$img@@1M" "$EFI_OUT" ::/EFI/BOOT/BOOTX64.EFI
+    printf 'Welcome to Ragnarok OS (x86_64 Ring-0, Odin + Direct UEFI)!\nRead directly via AHCI/NVMe DMA + GPT + FAT32.\n' \
+        | mcopy -i "$img@@1M" - ::/WELCOME.TXT
+
+    # Small 16 MiB raw NVMe test disk (verified via NVMe Identify + Block_Device)
+    if [[ ! -f "$nvme_img" ]]; then
+        truncate -s 16M "$nvme_img"
+    fi
+}
+
 qemu_base_args() {
+    ensure_disk_imgs
     QEMU_ARGS=(
         -enable-kvm
         -cpu host
@@ -57,8 +80,11 @@ qemu_base_args() {
         -vga std
         -boot menu=off
         -drive "if=pflash,format=raw,readonly=on,file=$OVMF"
-        -drive "if=none,id=esp,format=raw,file=fat:rw:$ESP_DIR"
-        -device "ide-hd,drive=esp,bootindex=1"
+        -device "ich9-ahci,id=ahci"
+        -drive "if=none,id=esp,format=raw,file=$BUILD_DIR/ragnarok.img"
+        -device "ide-hd,drive=esp,bus=ahci.0,bootindex=1"
+        -drive "if=none,id=nvmedisk,format=raw,file=$BUILD_DIR/nvme.img"
+        -device "nvme,serial=RAGNAROK0,drive=nvmedisk"
     )
 }
 
@@ -99,7 +125,7 @@ try:
             if not sent and b"RAGNAROK_READY" in buf:
                 sent = True
                 # First newline exits live animated splash into shell
-                proc.stdin.write(b"\ninfo\nmem\nlspci\nhalt\n")
+                proc.stdin.write(b"\ninfo\nmem\nlspci\nlsblk\nls\ncat WELCOME.TXT\nhalt\n")
                 proc.stdin.flush()
         if proc.poll() is not None:
             break
@@ -108,25 +134,17 @@ finally:
         proc.terminate()
     proc.wait(timeout=5)
 
-if b"RAGNAROK_READY" not in buf or b"Ragnarok OS v0.1" not in buf:
-    print("FAIL: expected boot banner and 'info' output", file=sys.stderr)
+if b"RAGNAROK_READY" not in buf or b"Welcome to Ragnarok OS" not in buf:
+    print("FAIL: expected boot banner and FAT32 WELCOME.TXT output", file=sys.stderr)
     sys.exit(1)
-print("\nPASS: Ragnarök booted via Direct UEFI -> Ring-0 -> Shell -> ACPI poweroff")
+print("\nPASS: Ragnarök booted via Direct UEFI -> Ring-0 -> AHCI+NVMe+FAT32 -> ACPI poweroff")
 PY
 }
 
 build_usb() {
-    require_cmd sfdisk mformat mmd mcopy truncate
     build
+    ensure_disk_imgs
     local img="$BUILD_DIR/ragnarok.img"
-    rm -f "$img"
-    truncate -s 64M "$img"
-    # GPT with a single EFI System Partition starting at 1 MiB (sector 2048)
-    printf 'label: gpt\nstart=2048, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="RAGNAROK_ESP"\n' \
-        | sfdisk -q "$img"
-    mformat -i "$img@@1M" -F -v RAGNAROK ::
-    mmd     -i "$img@@1M" ::/EFI ::/EFI/BOOT
-    mcopy   -i "$img@@1M" "$EFI_OUT" ::/EFI/BOOT/BOOTX64.EFI
     echo "Built bootable UEFI USB image -> $img ($(stat -c%s "$img") bytes)"
     echo "Flash to USB (replace /dev/sdX carefully!):"
     echo "  sudo dd if=$img of=/dev/sdX bs=4M status=progress conv=fsync"

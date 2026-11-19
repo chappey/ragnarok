@@ -9,6 +9,7 @@ foreign {
 	arch_cli      :: proc "c" () ---
 	arch_hlt      :: proc "c" () ---
 	arch_pause    :: proc "c" () ---
+	arch_mfence   :: proc "c" () ---
 	arch_reboot   :: proc "c" () ---
 	arch_poweroff :: proc "c" () ---
 }
