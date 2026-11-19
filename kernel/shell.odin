@@ -29,7 +29,7 @@ Command :: struct {
 	run:     Cmd_Proc,
 }
 
-g_commands := [24]Command{
+g_commands := [31]Command{
 	{
 		name    = "help",
 		summary = "List commands or show usage for one command",
@@ -68,9 +68,33 @@ g_commands := [24]Command{
 	},
 	{
 		name    = "ls",
-		summary = "List files in mounted FAT32 root directory",
-		usage   = "ls",
+		summary = "List files in current or given FAT32 directory",
+		usage   = "ls [path]",
 		run     = cmd_ls,
+	},
+	{
+		name    = "cd",
+		summary = "Change current FAT32 directory",
+		usage   = "cd [path]",
+		run     = cmd_cd,
+	},
+	{
+		name    = "pwd",
+		summary = "Print current FAT32 working directory",
+		usage   = "pwd",
+		run     = cmd_pwd,
+	},
+	{
+		name    = "mkdir",
+		summary = "Create a FAT32 directory",
+		usage   = "mkdir <dir>",
+		run     = cmd_mkdir,
+	},
+	{
+		name    = "rmdir",
+		summary = "Remove an empty FAT32 directory",
+		usage   = "rmdir <dir>",
+		run     = cmd_rmdir,
 	},
 	{
 		name    = "read",
@@ -85,10 +109,28 @@ g_commands := [24]Command{
 		run     = cmd_write,
 	},
 	{
+		name    = "copy",
+		summary = "Copy a file on FAT32",
+		usage   = "copy <src> <dst>",
+		run     = cmd_copy,
+	},
+	{
+		name    = "move",
+		summary = "Move or rename a file on FAT32",
+		usage   = "move <src> <dst>",
+		run     = cmd_move,
+	},
+	{
 		name    = "del",
-		summary = "Delete a file from FAT32 root directory",
+		summary = "Delete a file from FAT32",
 		usage   = "del <file>",
 		run     = cmd_del,
+	},
+	{
+		name    = "df",
+		summary = "Show mounted FAT32 capacity and free space",
+		usage   = "df",
+		run     = cmd_df,
 	},
 	{
 		name    = "find",
@@ -457,7 +499,95 @@ cmd_echo :: proc(ctx: ^Cmd_Context) -> int {
 }
 
 cmd_ls :: proc(ctx: ^Cmd_Context) -> int {
-	fat32_ls_buf(ctx.out)
+	path: []u8 = nil
+	if len(ctx.args) >= 2 {
+		path = transmute([]u8)ctx.args[1]
+	}
+	return 0 if fat32_ls_path(path, ctx.out) else 1
+}
+
+cmd_cd :: proc(ctx: ^Cmd_Context) -> int {
+	path: []u8 = nil
+	if len(ctx.args) >= 2 {
+		path = transmute([]u8)ctx.args[1]
+	}
+	if !fat32_cd(path) {
+		ob_puts(ctx.out, "cd: directory not found\n")
+		return 1
+	}
+	return 0
+}
+
+cmd_pwd :: proc(ctx: ^Cmd_Context) -> int {
+	ob_puts(ctx.out, fat32_pwd())
+	ob_putc(ctx.out, '\n')
+	return 0
+}
+
+cmd_mkdir :: proc(ctx: ^Cmd_Context) -> int {
+	if len(ctx.args) < 2 {
+		ob_puts(ctx.out, "Usage: mkdir <dir>\n")
+		return 1
+	}
+	if !fat32_mkdir(transmute([]u8)ctx.args[1]) {
+		ob_puts(ctx.out, "mkdir: failed (exists or invalid 8.3 name)\n")
+		return 1
+	}
+	return 0
+}
+
+cmd_rmdir :: proc(ctx: ^Cmd_Context) -> int {
+	if len(ctx.args) < 2 {
+		ob_puts(ctx.out, "Usage: rmdir <dir>\n")
+		return 1
+	}
+	if !fat32_rmdir(transmute([]u8)ctx.args[1]) {
+		ob_puts(ctx.out, "rmdir: failed (not empty or not found)\n")
+		return 1
+	}
+	return 0
+}
+
+cmd_copy :: proc(ctx: ^Cmd_Context) -> int {
+	if len(ctx.args) < 3 {
+		ob_puts(ctx.out, "Usage: copy <src> <dst>\n")
+		return 1
+	}
+	data, ok := fat32_read_file(transmute([]u8)ctx.args[1], ctx.arena)
+	if !ok {
+		ob_puts(ctx.out, "copy: source not found\n")
+		return 1
+	}
+	if !fat32_write_file(transmute([]u8)ctx.args[2], data) {
+		ob_puts(ctx.out, "copy: failed writing destination\n")
+		return 1
+	}
+	return 0
+}
+
+cmd_move :: proc(ctx: ^Cmd_Context) -> int {
+	if len(ctx.args) < 3 {
+		ob_puts(ctx.out, "Usage: move <src> <dst>\n")
+		return 1
+	}
+	if ctx.args[1] == ctx.args[2] {
+		return 0
+	}
+	data, ok := fat32_read_file(transmute([]u8)ctx.args[1], ctx.arena)
+	if !ok {
+		ob_puts(ctx.out, "move: source not found\n")
+		return 1
+	}
+	if !fat32_write_file(transmute([]u8)ctx.args[2], data) {
+		ob_puts(ctx.out, "move: failed writing destination\n")
+		return 1
+	}
+	_ = fat32_del_file(transmute([]u8)ctx.args[1])
+	return 0
+}
+
+cmd_df :: proc(ctx: ^Cmd_Context) -> int {
+	fat32_df(ctx.out)
 	return 0
 }
 

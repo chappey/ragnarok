@@ -129,9 +129,11 @@ try:
                 sent = True
                 # First newline exits live animated splash into shell
                 proc.stdin.write(
-                    b"\nsys\nrtc\nmem\npci | head 3\ndisks\nls\n"
+                    b"\nsys\nrtc\nmem\npci | head 3\ndisks\ndf\nls\nls /EFI/BOOT\n"
+                    b"mkdir TESTDIR\ncd TESTDIR\npwd\n"
+                    b"write A.TXT subfile\ncopy A.TXT B.TXT\nmove B.TXT C.TXT\n"
+                    b"read /TESTDIR/C.TXT\ndel A.TXT\ndel C.TXT\ncd ..\nrmdir TESTDIR\n"
                     b"read WELCOME.TXT | find AHCI\nread WELCOME.TXT | count\n"
-                    b"write NOTE.TXT hello from ragnarok\nread NOTE.TXT\ndel NOTE.TXT\n"
                     b"echo hello | hex\n"
                     b"echo foo bar\x17baz\n"
                     b"\x1b[A\n"
@@ -151,9 +153,10 @@ required = [
     b"RAGNAROK_READY",
     b"USB=kbd",
     b"[TXT] WELCOME.TXT",
+    b"BOOTX64.EFI",
+    b"/TESTDIR",
+    b"subfile",
     b"Read directly via AHCI/NVMe DMA",
-    b"hello from ragnarok",
-    b"Deleted NOTE.TXT",
     b"lines=2",
     b"68 65 6C 6C 6F",
     b"foo baz",
