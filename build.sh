@@ -95,11 +95,11 @@ run_vm() {
     require_cmd qemu-system-x86_64
     build
     qemu_base_args
-    echo "Booting Ragnarök fullscreen (Ctrl+Alt+F toggle fullscreen, Ctrl+Alt+G ungrab, Ctrl+Alt+3 COM1 serial, Ctrl+Alt+1 display)..."
+    echo "Booting Ragnarök fullscreen (Ctrl+Alt+F toggle fullscreen, Ctrl+Alt+G ungrab)..."
     exec qemu-system-x86_64 "${QEMU_ARGS[@]}" \
         -display sdl,gl=off \
         -full-screen \
-        -serial vc
+        -serial none
 }
 
 test_vm() {
